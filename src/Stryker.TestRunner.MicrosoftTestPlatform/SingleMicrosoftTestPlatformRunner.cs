@@ -147,17 +147,14 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
     internal virtual async Task<ICoverageRunResult> RunSingleTestForCoverageAsync(
         string assembly, TestNode test, string testId, CoverageConfidence confidence)
     {
+        DeleteCoverageFile();
+
         try
         {
-            DeleteCoverageFile();
-
             var server = await GetOrCreateServerAsync(assembly).ConfigureAwait(false);
             await server.RunTestsAsync(new[] { test }).ConfigureAwait(false);
-            await StopAndRemoveServerAsync(assembly).ConfigureAwait(false);
 
             var (coveredMutants, staticMutants) = ReadCoverageData();
-
-            DeleteCoverageFile();
 
             // Empty coverage likely means the process was force-killed before FlushCoverageToFile ran
             if (coveredMutants.Count == 0 && staticMutants.Count == 0)
@@ -188,15 +185,25 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "{RunnerId}: Failed to capture coverage for test {TestId}", _runnerId, testId);
-            try { await StopAndRemoveServerAsync(assembly).ConfigureAwait(false); }
-            catch { /* best-effort cleanup to prevent server leak */ }
-            DeleteCoverageFile();
             return CoverageRunResult.Create(
                 testId,
                 CoverageConfidence.Dubious,
                 Array.Empty<int>(),
                 Array.Empty<int>(),
                 Array.Empty<int>());
+        }
+        finally
+        {
+            try
+            {
+                await StopAndRemoveServerAsync(assembly).ConfigureAwait(false);
+            }
+            catch (Exception cleanupEx)
+            {
+                _logger.LogDebug(cleanupEx, "{RunnerId}: Failed to stop and remove server for {Assembly} during cleanup", _runnerId, assembly);
+            }
+
+            DeleteCoverageFile();
         }
     }
 
@@ -545,6 +552,12 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
             var executedTests = accumulator.BuildExecutedTests();
             var failedTestIds = accumulator.BuildFailedTests();
             var timedOutTestIds = accumulator.BuildTimedOutTests();
+
+            IEnumerable<MtpTestDescription> testDescriptionValues;
+            lock (_discoveryLock)
+            {
+                testDescriptionValues = _testDescriptions.Values.ToList();
+            }
 
             if (update is not null && mutants is not null)
             {

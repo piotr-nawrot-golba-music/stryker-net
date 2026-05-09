@@ -104,7 +104,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
             var confidence = _options.OptimizationMode.HasFlag(OptimizationModes.CaptureCoveragePerTest)
                 ? CoverageConfidence.Exact
                 : CoverageConfidence.Normal;
-            return CaptureCoverageTestByTest(confidence);
+            return CaptureCoverageTestByTest(project, confidence);
         }
 
         return CaptureCoverageInOneGo(project);
@@ -167,6 +167,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
     }
 
     private IEnumerable<ICoverageRunResult> CaptureCoverageTestByTest(
+        IProjectAndTests project,
         CoverageConfidence confidence)
     {
         _logger.LogInformation("Starting per-test coverage capture for MTP runner");
@@ -178,9 +179,18 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
 
         try
         {
+            var testAssemblies = project.GetTestAssemblies();
+            ArgumentNullException.ThrowIfNull(testAssemblies);
+            var assemblySet = new HashSet<string>(testAssemblies);
+
             var allTests = new List<(string Assembly, TestNode Test, string TestId)>();
             foreach (var (assembly, tests) in _testsByAssembly)
             {
+                if (!assemblySet.Contains(assembly))
+                {
+                    continue;
+                }
+
                 foreach (var test in tests)
                 {
                     if (_testDescriptions.TryGetValue(test.Uid, out var desc))
@@ -191,7 +201,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
             }
 
             _logger.LogInformation("Capturing per-test coverage for {TestCount} tests across {AssemblyCount} assemblies",
-                allTests.Count, _testsByAssembly.Count);
+                allTests.Count, assemblySet.Count);
 
             var results = new ConcurrentBag<ICoverageRunResult>();
 
