@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Stryker.Abstractions;
 using Stryker.Abstractions.Options;
@@ -269,32 +268,40 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
 
     /// <summary>
     /// Requests MutantControl's background thread to flush coverage by writing a signal file,
-    /// then polls for the ack file. Returns (empty, empty) on timeout — treated as legitimate empty coverage.
+    /// then waits for the ack file via <see cref="FileSystemWatcher"/>. Returns (empty, empty) on timeout — treated as legitimate empty coverage.
     /// </summary>
     private async Task<(IReadOnlyList<int> CoveredMutants, IReadOnlyList<int> StaticMutants)> RequestCoverageFlushViaSignalAsync(string testId)
     {
         // Clean slate: remove any stale ack or coverage from previous runs
         DeleteCoverageFile();
-        try
-        {
-            if (File.Exists(_signalAckFilePath)) File.Delete(_signalAckFilePath);
-        }
-        catch { }
+        try { if (File.Exists(_signalAckFilePath)) File.Delete(_signalAckFilePath); } catch { }
 
-        // Write the signal file with a unique request ID so we can verify the ack
         var requestId = Guid.NewGuid().ToString();
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var ackDir = Path.GetDirectoryName(_signalAckFilePath)!;
+        var ackFile = Path.GetFileName(_signalAckFilePath);
+        using var watcher = new FileSystemWatcher(ackDir, ackFile);
+        watcher.Created += (_, _) => tcs.TrySetResult(true);
+        watcher.Changed += (_, _) => tcs.TrySetResult(true);
+        watcher.EnableRaisingEvents = true;
+
+        // Write signal AFTER enabling watcher to prevent TOCTOU race
         File.WriteAllText(_signalFilePath, requestId);
 
-        // Poll for ack file with 500ms total timeout
-        var sw = Stopwatch.StartNew();
-        while (!File.Exists(_signalAckFilePath) && sw.ElapsedMilliseconds < 500)
+        // TOCTOU guard: ack may have arrived before watcher was fully active
+        if (File.Exists(_signalAckFilePath))
         {
-            await Task.Delay(15).ConfigureAwait(false);
+            tcs.TrySetResult(true);
         }
 
+        using var timeoutCts = new CancellationTokenSource(500);
+        timeoutCts.Token.Register(() => tcs.TrySetResult(false));
+
+        await tcs.Task.ConfigureAwait(false);
+
         if (!File.Exists(_signalAckFilePath))
-        {
-            _logger.LogWarning("{RunnerId}: Signal flush timed out for test {TestId} — returning empty coverage", _runnerId, testId);
+        {            _logger.LogWarning("{RunnerId}: Signal flush timed out for test {TestId} — returning empty coverage", _runnerId, testId);
             try { File.Delete(_signalFilePath); } catch { }
             return (Array.Empty<int>(), Array.Empty<int>());
         }
@@ -415,9 +422,13 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
                 return (Array.Empty<int>(), Array.Empty<int>());
             }
 
-            var parts = content.Split(';');
-            var coveredMutants = ParseMutantIds(parts.Length > 0 ? parts[0] : string.Empty);
-            var staticMutants = ParseMutantIds(parts.Length > 1 ? parts[1] : string.Empty);
+            var span = content.AsSpan();
+            var semicolon = span.IndexOf(';');
+            var coveredSpan = semicolon >= 0 ? span[..semicolon] : span;
+            var staticSpan = semicolon >= 0 ? span[(semicolon + 1)..] : ReadOnlySpan<char>.Empty;
+
+            var coveredMutants = ParseMutantIds(coveredSpan);
+            var staticMutants = ParseMutantIds(staticSpan);
 
             return (coveredMutants, staticMutants);
         }
@@ -428,18 +439,22 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         }
     }
 
-    private static IReadOnlyList<int> ParseMutantIds(string idString)
+    private static IReadOnlyList<int> ParseMutantIds(ReadOnlySpan<char> idSpan)
     {
-        if (string.IsNullOrWhiteSpace(idString))
+        idSpan = idSpan.Trim();
+        if (idSpan.IsEmpty)
         {
             return Array.Empty<int>();
         }
 
-        var parts = idString.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var result = new List<int>(parts.Length);
-        foreach (var part in parts)
+        var result = new List<int>();
+        while (!idSpan.IsEmpty)
         {
-            if (int.TryParse(part, out var id))
+            var comma = idSpan.IndexOf(',');
+            var token = (comma >= 0 ? idSpan[..comma] : idSpan).Trim();
+            idSpan = comma >= 0 ? idSpan[(comma + 1)..] : ReadOnlySpan<char>.Empty;
+
+            if (!token.IsEmpty && int.TryParse(token, out var id))
             {
                 result.Add(id);
             }
@@ -462,7 +477,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         }
     }
 
-    private async Task<AssemblyTestServer> GetOrCreateServerAsync(string assembly)
+    private async ValueTask<AssemblyTestServer> GetOrCreateServerAsync(string assembly)
     {
         await _serverLock.WaitAsync().ConfigureAwait(false);
         try

@@ -9,8 +9,8 @@ namespace Stryker
     /// </summary>
     public static class MutantControl
     {
-        private static System.Collections.Generic.List<int> _coveredMutants = new System.Collections.Generic.List<int>();
-        private static System.Collections.Generic.List<int> _coveredStaticMutants = new System.Collections.Generic.List<int>();
+        private static System.Collections.Generic.HashSet<int> _coveredMutants = new System.Collections.Generic.HashSet<int>();
+        private static System.Collections.Generic.HashSet<int> _coveredStaticMutants = new System.Collections.Generic.HashSet<int>();
         private static string envName = string.Empty;
         private static System.Object _coverageLock = new System.Object();
         private static long _lastMutantFileVersion = -1;
@@ -74,11 +74,11 @@ namespace Stryker
             ResetCoverage();
         }
 
-        // Replaces the coverage lists with empty ones — must only be called while holding _coverageLock.
+        // Replaces the coverage sets with empty ones — must only be called while holding _coverageLock.
         private static void ResetCoverageUnderLock()
         {
-            _coveredMutants = new System.Collections.Generic.List<int>();
-            _coveredStaticMutants = new System.Collections.Generic.List<int>();
+            _coveredMutants = new System.Collections.Generic.HashSet<int>();
+            _coveredStaticMutants = new System.Collections.Generic.HashSet<int>();
         }
 
         public static void ResetCoverage()
@@ -147,13 +147,20 @@ namespace Stryker
 
         public static System.Collections.Generic.IList<int>[] GetCoverageData()
         {
-            System.Collections.Generic.IList<int>[] result;
+            System.Collections.Generic.HashSet<int> covered;
+            System.Collections.Generic.HashSet<int> statics;
             lock (_coverageLock)
             {
-                result = new System.Collections.Generic.IList<int>[] { _coveredMutants, _coveredStaticMutants };
+                covered = _coveredMutants;
+                statics = _coveredStaticMutants;
                 ResetCoverageUnderLock();
             }
-            return result;
+            // Copy to List<int> outside the lock: HashSet<int> does not implement IList<int>
+            return new System.Collections.Generic.IList<int>[]
+            {
+                new System.Collections.Generic.List<int>(covered),
+                new System.Collections.Generic.List<int>(statics)
+            };
         }
 
         /// <summary>
@@ -307,11 +314,8 @@ namespace Stryker
         {
             lock (_coverageLock)
             {
-                if (!_coveredMutants.Contains(id))
-                {
-                    _coveredMutants.Add(id);
-                }
-                if (MutantContext.InStatic() && !_coveredStaticMutants.Contains(id))
+                _coveredMutants.Add(id);
+                if (MutantContext.InStatic())
                 {
                     _coveredStaticMutants.Add(id);
                 }
