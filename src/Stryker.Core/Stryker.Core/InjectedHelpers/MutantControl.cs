@@ -3,7 +3,9 @@ namespace Stryker
     /// <summary>
     /// A static class used for controlling mutant activation and coverage tracking at runtime.
     /// It supports both environment variable-based control (for VSTest runner) and file-based control (for MTP runner with process reuse).
-    /// It should only use C# features up to v2 to ensure compatibility with the widest range of projects it is injected into.
+    /// This file is compiled with the TARGET project's LangVersion (via GetParseOptions), not Stryker's own C# version.
+    /// The minimum supported target TFM is .NET Framework 4.8, which defaults to C# 7.3 — so this file must stay within C# 7.3.
+    /// (The signal-flush additions only use C# 2.0 features: generics, null-coalescing, anonymous delegates, Thread — all safe.)
     /// </summary>
     public static class MutantControl
     {
