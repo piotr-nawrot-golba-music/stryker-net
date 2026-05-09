@@ -151,8 +151,22 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
 
         try
         {
-            var server = await GetOrCreateServerAsync(assembly).ConfigureAwait(false);
-            await server.RunTestsAsync(new[] { test }).ConfigureAwait(false);
+            try
+            {
+                var server = await GetOrCreateServerAsync(assembly).ConfigureAwait(false);
+                await server.RunTestsAsync(new[] { test }).ConfigureAwait(false);
+            }
+            finally
+            {
+                try
+                {
+                    await StopAndRemoveServerAsync(assembly).ConfigureAwait(false);
+                }
+                catch (Exception cleanupEx)
+                {
+                    _logger.LogDebug(cleanupEx, "{RunnerId}: Failed to stop and remove server for {Assembly} during cleanup", _runnerId, assembly);
+                }
+            }
 
             var (coveredMutants, staticMutants) = ReadCoverageData();
 
@@ -194,15 +208,6 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         }
         finally
         {
-            try
-            {
-                await StopAndRemoveServerAsync(assembly).ConfigureAwait(false);
-            }
-            catch (Exception cleanupEx)
-            {
-                _logger.LogDebug(cleanupEx, "{RunnerId}: Failed to stop and remove server for {Assembly} during cleanup", _runnerId, assembly);
-            }
-
             DeleteCoverageFile();
         }
     }
