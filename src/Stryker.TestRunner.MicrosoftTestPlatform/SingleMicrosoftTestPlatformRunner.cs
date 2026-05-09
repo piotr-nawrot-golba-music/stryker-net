@@ -767,6 +767,8 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
                 _serverLock.Release();
             }
 
+            _serverLock.Dispose();
+
             // Clean up temp files
             try
             {

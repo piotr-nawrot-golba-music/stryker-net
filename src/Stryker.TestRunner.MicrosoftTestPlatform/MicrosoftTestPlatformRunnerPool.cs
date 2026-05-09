@@ -184,18 +184,21 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
             var assemblySet = new HashSet<string>(testAssemblies);
 
             var allTests = new List<(string Assembly, TestNode Test, string TestId)>();
-            foreach (var (assembly, tests) in _testsByAssembly)
+            lock (_discoveryLock)
             {
-                if (!assemblySet.Contains(assembly))
+                foreach (var (assembly, tests) in _testsByAssembly)
                 {
-                    continue;
-                }
-
-                foreach (var test in tests)
-                {
-                    if (_testDescriptions.TryGetValue(test.Uid, out var desc))
+                    if (!assemblySet.Contains(assembly))
                     {
-                        allTests.Add((assembly, test, desc.Id));
+                        continue;
+                    }
+
+                    foreach (var test in tests)
+                    {
+                        if (_testDescriptions.TryGetValue(test.Uid, out var desc))
+                        {
+                            allTests.Add((assembly, test, desc.Id));
+                        }
                     }
                 }
             }
@@ -205,18 +208,18 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
 
             var results = new ConcurrentBag<ICoverageRunResult>();
 
-            Parallel.ForEach(allTests,
+            Parallel.ForEachAsync(allTests,
                 new ParallelOptions { MaxDegreeOfParallelism = _countOfRunners },
-                testInfo =>
+                async (testInfo, _) =>
                 {
-                    var result = RunThisAsync(async runner =>
+                    var result = await RunThisAsync(async runner =>
                         await runner.RunSingleTestForCoverageAsync(
                             testInfo.Assembly, testInfo.Test, testInfo.TestId, confidence)
                             .ConfigureAwait(false))
-                        .GetAwaiter().GetResult();
+                        .ConfigureAwait(false);
 
                     results.Add(result);
-                });
+                }).GetAwaiter().GetResult();
 
             _logger.LogInformation(
                 "Per-test coverage capture complete: {TestCount} tests captured",
