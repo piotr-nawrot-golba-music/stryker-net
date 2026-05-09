@@ -683,4 +683,90 @@ public class SingleMicrosoftTestPlatformRunnerCoverageTests
         coverage[0].Confidence.ShouldBe(CoverageConfidence.Dubious);
         coverage[0].MutationsCovered.ShouldBeEmpty();
     }
+
+    [TestMethod]
+    public async Task RunSingleTestForCoverageAsync_Normal_ShouldUseSignalFlush_NotRestartServer()
+    {
+        var runnerId = 700;
+        bool signalPathCalled = false;
+        bool restartPathCalled = false;
+
+        var runner = new SignalTrackingRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            onSignal: () => signalPathCalled = true,
+            onRestart: () => restartPathCalled = true);
+
+        var testNode = new TestNode("t1", "Test1", "test", "discovered");
+        await runner.RunSingleTestForCoverageAsync("assembly.dll", testNode, "t1", CoverageConfidence.Normal);
+
+        signalPathCalled.ShouldBeTrue("Normal confidence should use signal flush path");
+        restartPathCalled.ShouldBeFalse("Normal confidence should NOT use the server-restart path");
+    }
+
+    [TestMethod]
+    public async Task RunSingleTestForCoverageAsync_Exact_ShouldRestartServer()
+    {
+        var runnerId = 701;
+        bool signalPathCalled = false;
+        bool restartPathCalled = false;
+
+        var runner = new SignalTrackingRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            onSignal: () => signalPathCalled = true,
+            onRestart: () => restartPathCalled = true);
+
+        var testNode = new TestNode("t1", "Test1", "test", "discovered");
+        await runner.RunSingleTestForCoverageAsync("assembly.dll", testNode, "t1", CoverageConfidence.Exact);
+
+        restartPathCalled.ShouldBeTrue("Exact confidence should use server-restart path");
+        signalPathCalled.ShouldBeFalse("Exact confidence should NOT use signal flush path");
+    }
+}
+
+/// <summary>
+/// Test helper that overrides the two routing sub-methods to track which path was taken,
+/// without starting real test server processes.
+/// </summary>
+internal class SignalTrackingRunner : SingleMicrosoftTestPlatformRunner
+{
+    private readonly Action _onSignal;
+    private readonly Action _onRestart;
+
+    public SignalTrackingRunner(
+        int id,
+        Dictionary<string, List<TestNode>> testsByAssembly,
+        Dictionary<string, MtpTestDescription> testDescriptions,
+        TestSet testSet,
+        object discoveryLock,
+        Action onSignal,
+        Action onRestart)
+        : base(id, testsByAssembly, testDescriptions, testSet, discoveryLock, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
+    {
+        _onSignal = onSignal;
+        _onRestart = onRestart;
+    }
+
+    internal override Task<ICoverageRunResult> RunSingleTestWithSignalAsync(
+        string assembly, TestNode test, string testId, CoverageConfidence confidence)
+    {
+        _onSignal();
+        return Task.FromResult<ICoverageRunResult>(
+            CoverageRunResult.Create(testId, confidence, [], [], []));
+    }
+
+    internal override Task<ICoverageRunResult> RunSingleTestWithRestartAsync(
+        string assembly, TestNode test, string testId, CoverageConfidence confidence)
+    {
+        _onRestart();
+        return Task.FromResult<ICoverageRunResult>(
+            CoverageRunResult.Create(testId, confidence, [], [], []));
+    }
 }

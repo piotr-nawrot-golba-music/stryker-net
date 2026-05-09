@@ -21,12 +21,20 @@ namespace Stryker
         private static bool _coverageFilePathCached;
         private static bool _processExitRegistered;
 
+        // Signal-flush IPC: allows runner to request a coverage flush without restarting the process
+        private static string _cachedSignalFilePath = string.Empty;
+        private static string _cachedAckFilePath = string.Empty;
+        private static volatile bool _coverageDirty;
+        private static System.Threading.Thread _signalThread;
+
         // this attribute will be set by the Stryker Data Collector before each test
         public static bool CaptureCoverage;
         public static int ActiveMutant = -2;
         public const int ActiveMutantNotInitValue = -2;
 
+#pragma warning disable CS8618 // _signalThread is conditionally initialized based on env var; null is safe (only accessed after Start())
         static MutantControl()
+#pragma warning restore CS8618
         {
             // Check for MTP file-based coverage mode at class initialization
             // Environment variable contains only the filename, not the full path
@@ -39,12 +47,23 @@ namespace Stryker
                 _coverageFilePathCached = true;
                 CaptureCoverage = true;
                 
-                // Register for process exit to flush coverage data
+                // Register for process exit to flush any remaining coverage data
                 if (!_processExitRegistered)
                 {
                     System.AppDomain.CurrentDomain.ProcessExit += delegate { FlushCoverageToFile(); };
                     _processExitRegistered = true;
                 }
+            }
+
+            // Set up signal-flush background thread for in-process coverage flush (no process restart needed)
+            string signalFileName = System.Environment.GetEnvironmentVariable("STRYKER_COVERAGE_SIGNAL_FILE") ?? string.Empty;
+            if (!string.IsNullOrEmpty(signalFileName))
+            {
+                _cachedSignalFilePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), signalFileName);
+                _cachedAckFilePath = _cachedSignalFilePath + ".ack";
+                _signalThread = new System.Threading.Thread(SignalFlushLoop);
+                _signalThread.IsBackground = true;
+                _signalThread.Start();
             }
         }
 
@@ -53,10 +72,19 @@ namespace Stryker
             ResetCoverage();
         }
 
-        public static void ResetCoverage()
+        // Replaces the coverage lists with empty ones — must only be called while holding _coverageLock.
+        private static void ResetCoverageUnderLock()
         {
             _coveredMutants = new System.Collections.Generic.List<int>();
             _coveredStaticMutants = new System.Collections.Generic.List<int>();
+        }
+
+        public static void ResetCoverage()
+        {
+            lock (_coverageLock)
+            {
+                ResetCoverageUnderLock();
+            }
         }
 
         public static void ResetActiveMutant()
@@ -117,14 +145,18 @@ namespace Stryker
 
         public static System.Collections.Generic.IList<int>[] GetCoverageData()
         {
-            System.Collections.Generic.IList<int>[] result = new System.Collections.Generic.IList<int>[] { _coveredMutants, _coveredStaticMutants };
-            ResetCoverage();
+            System.Collections.Generic.IList<int>[] result;
+            lock (_coverageLock)
+            {
+                result = new System.Collections.Generic.IList<int>[] { _coveredMutants, _coveredStaticMutants };
+                ResetCoverageUnderLock();
+            }
             return result;
         }
 
         /// <summary>
         /// Writes accumulated coverage data to a file for MTP runner IPC.
-        /// Called automatically on process exit to capture all coverage from tests run in this process.
+        /// Called automatically on process exit; skips the write if coverage was already flushed via signal.
         /// Format: "coveredMutants;staticMutants" (comma-separated IDs)
         /// </summary>
         public static void FlushCoverageToFile()
@@ -146,6 +178,24 @@ namespace Stryker
                 return;
             }
 
+            // Skip if the signal thread already flushed this data to avoid overwriting it
+            if (!_coverageDirty)
+            {
+                return;
+            }
+
+            FlushCoverageToFileCore();
+        }
+
+        // Writes the current coverage lists to the coverage file and resets state.
+        // Must only be called when _cachedCoverageFilePath is already resolved.
+        private static void FlushCoverageToFileCore()
+        {
+            if (string.IsNullOrEmpty(_cachedCoverageFilePath))
+            {
+                return;
+            }
+
             try
             {
                 lock (_coverageLock)
@@ -154,13 +204,42 @@ namespace Stryker
                     string staticMutants = string.Join(",", _coveredStaticMutants);
                     string content = covered + ";" + staticMutants;
                     System.IO.File.WriteAllText(_cachedCoverageFilePath, content);
-                    ResetCoverage();
+                    _coverageDirty = false;
+                    ResetCoverageUnderLock();
                 }
             }
             catch (System.Exception ex)
             {
                 // Do not fail tests due to coverage write issues; log for diagnostics instead.
                 System.Diagnostics.Debug.WriteLine(string.Format("[Stryker] Failed to flush coverage to file '{0}': {1}", _cachedCoverageFilePath, ex));
+            }
+        }
+
+        // Background thread: polls for a signal file written by the runner, flushes coverage on demand,
+        // and writes an ack file so the runner knows the flush completed.
+        private static void SignalFlushLoop()
+        {
+            while (true)
+            {
+                try
+                {
+                    if (System.IO.File.Exists(_cachedSignalFilePath))
+                    {
+                        string requestId = System.IO.File.ReadAllText(_cachedSignalFilePath).Trim();
+                        FlushCoverageToFileCore();
+                        System.IO.File.WriteAllText(_cachedAckFilePath, requestId);
+                        try { System.IO.File.Delete(_cachedSignalFilePath); }
+                        catch { }
+                    }
+                    else
+                    {
+                        System.Threading.Thread.Sleep(15);
+                    }
+                }
+                catch
+                {
+                    System.Threading.Thread.Sleep(15);
+                }
             }
         }
 
@@ -234,6 +313,7 @@ namespace Stryker
                 {
                     _coveredStaticMutants.Add(id);
                 }
+                _coverageDirty = true;
             }
         }
     }

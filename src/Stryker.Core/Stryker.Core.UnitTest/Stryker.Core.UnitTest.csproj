@@ -4,6 +4,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- MutantControl is excluded from Stryker.Core compilation (embedded as resource only).
+         Include it here so MutantControlTests can reference Stryker.MutantControl directly. -->
+    <Compile Include="..\Stryker.Core\InjectedHelpers\MutantControl.cs" Link="InjectedHelpers\MutantControl.cs" />
+    <Compile Include="..\Stryker.Core\InjectedHelpers\Coverage\MutantContext.cs" Link="InjectedHelpers\Coverage\MutantContext.cs" />
     <Compile Remove="TestResources\ExampleSourceFile.cs" />
     <Compile Remove="TestResources\ExampleTestFileA.cs" />
     <Compile Remove="TestResources\ExampleTestFileB.cs" />

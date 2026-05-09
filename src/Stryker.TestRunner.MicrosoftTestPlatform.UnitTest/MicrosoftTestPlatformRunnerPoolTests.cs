@@ -590,6 +590,116 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
         capturedAssemblies.Count(a => a == "assembly1.dll").ShouldBe(2);
         capturedAssemblies.Count(a => a == "assembly2.dll").ShouldBe(1);
     }
+    [TestMethod]
+    public void CaptureCoverage_WithCoverageBasedTest_ShouldUseNormalConfidence()
+    {
+        var options = new Mock<IStrykerOptions>();
+        options.Setup(x => x.Concurrency).Returns(1);
+        // CoverageBasedTest only (no CaptureCoveragePerTest) = perTest = Normal confidence
+        options.Setup(x => x.OptimizationMode).Returns(OptimizationModes.CoverageBasedTest);
+
+        var testNode = new TestNode("test-1", "NormalTest", "test", "discovered");
+        var testsByAssembly = new Dictionary<string, List<TestNode>>
+        {
+            ["assembly.dll"] = [testNode]
+        };
+        var testDescriptions = new Dictionary<string, MtpTestDescription>
+        {
+            ["test-1"] = new(testNode)
+        };
+
+        CoverageConfidence? capturedConfidence = null;
+
+        var runnerFactory = new Mock<ISingleRunnerFactory>();
+        runnerFactory.Setup(x => x.CreateRunner(
+                It.IsAny<int>(),
+                It.IsAny<Dictionary<string, List<TestNode>>>(),
+                It.IsAny<Dictionary<string, MtpTestDescription>>(),
+                It.IsAny<TestSet>(),
+                It.IsAny<object>(),
+                It.IsAny<ILogger>(),
+                It.IsAny<IStrykerOptions>()))
+            .Returns<int, Dictionary<string, List<TestNode>>, Dictionary<string, MtpTestDescription>, TestSet, object, ILogger, IStrykerOptions>(
+                (id, tba, td, ts, dl, logger, opts) =>
+                {
+                    if (tba.Count == 0)
+                    {
+                        foreach (var kvp in testsByAssembly) tba[kvp.Key] = kvp.Value;
+                        foreach (var kvp in testDescriptions) td[kvp.Key] = kvp.Value;
+                    }
+                    return new TestableRunner(id, tba, td, ts, dl, () => { },
+                        coverageHandler: (_, _, testId, confidence) =>
+                        {
+                            capturedConfidence = confidence;
+                            return Task.FromResult<ICoverageRunResult>(
+                                CoverageRunResult.Create(testId, confidence, [1], [], []));
+                        });
+                });
+
+        var project = new Mock<IProjectAndTests>();
+        project.Setup(x => x.GetTestAssemblies()).Returns(new[] { "assembly.dll" });
+
+        using var pool = new MicrosoftTestPlatformRunnerPool(options.Object, NullLogger.Instance, runnerFactory.Object);
+        pool.CaptureCoverage(project.Object).ToList();
+
+        capturedConfidence.ShouldBe(CoverageConfidence.Normal, "perTest (CoverageBasedTest only) should use Normal confidence");
+    }
+
+    [TestMethod]
+    public void CaptureCoverage_WithPerTestInIsolation_ShouldUseExactConfidence()
+    {
+        var options = new Mock<IStrykerOptions>();
+        options.Setup(x => x.Concurrency).Returns(1);
+        // CoverageBasedTest + CaptureCoveragePerTest = perTestInIsolation = Exact confidence
+        options.Setup(x => x.OptimizationMode).Returns(
+            OptimizationModes.CoverageBasedTest | OptimizationModes.CaptureCoveragePerTest);
+
+        var testNode = new TestNode("test-1", "IsolationTest", "test", "discovered");
+        var testsByAssembly = new Dictionary<string, List<TestNode>>
+        {
+            ["assembly.dll"] = [testNode]
+        };
+        var testDescriptions = new Dictionary<string, MtpTestDescription>
+        {
+            ["test-1"] = new(testNode)
+        };
+
+        CoverageConfidence? capturedConfidence = null;
+
+        var runnerFactory = new Mock<ISingleRunnerFactory>();
+        runnerFactory.Setup(x => x.CreateRunner(
+                It.IsAny<int>(),
+                It.IsAny<Dictionary<string, List<TestNode>>>(),
+                It.IsAny<Dictionary<string, MtpTestDescription>>(),
+                It.IsAny<TestSet>(),
+                It.IsAny<object>(),
+                It.IsAny<ILogger>(),
+                It.IsAny<IStrykerOptions>()))
+            .Returns<int, Dictionary<string, List<TestNode>>, Dictionary<string, MtpTestDescription>, TestSet, object, ILogger, IStrykerOptions>(
+                (id, tba, td, ts, dl, logger, opts) =>
+                {
+                    if (tba.Count == 0)
+                    {
+                        foreach (var kvp in testsByAssembly) tba[kvp.Key] = kvp.Value;
+                        foreach (var kvp in testDescriptions) td[kvp.Key] = kvp.Value;
+                    }
+                    return new TestableRunner(id, tba, td, ts, dl, () => { },
+                        coverageHandler: (_, _, testId, confidence) =>
+                        {
+                            capturedConfidence = confidence;
+                            return Task.FromResult<ICoverageRunResult>(
+                                CoverageRunResult.Create(testId, confidence, [1], [], []));
+                        });
+                });
+
+        var project = new Mock<IProjectAndTests>();
+        project.Setup(x => x.GetTestAssemblies()).Returns(new[] { "assembly.dll" });
+
+        using var pool = new MicrosoftTestPlatformRunnerPool(options.Object, NullLogger.Instance, runnerFactory.Object);
+        pool.CaptureCoverage(project.Object).ToList();
+
+        capturedConfidence.ShouldBe(CoverageConfidence.Exact, "perTestInIsolation (CoverageBasedTest + CaptureCoveragePerTest) should use Exact confidence");
+    }
 }
 
 

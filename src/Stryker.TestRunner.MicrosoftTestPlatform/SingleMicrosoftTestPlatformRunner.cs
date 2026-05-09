@@ -26,6 +26,8 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
     private readonly ILogger _logger;
     private readonly string _mutantFilePath;
     private readonly string _coverageFilePath;
+    private readonly string _signalFilePath;
+    private readonly string _signalAckFilePath;
     private readonly IStrykerOptions? _options;
 
     private readonly Dictionary<string, AssemblyTestServer> _assemblyServers = new();
@@ -55,6 +57,8 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         // Create unique file paths for this runner to communicate with the test process
         _mutantFilePath = Path.Combine(Path.GetTempPath(), $"stryker-mutant-{_id}.txt");
         _coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{_id}.txt");
+        _signalFilePath = Path.Combine(Path.GetTempPath(), $"stryker-signal-{_id}.txt");
+        _signalAckFilePath = _signalFilePath + ".ack";
         _runnerId = $"MtpRunner-{_id}";
 
         // Initialize with no active mutation
@@ -141,14 +145,28 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
 
     /// <summary>
     /// Runs a single test in isolation to capture its per-test coverage data.
-    /// The flow is: start server → run one test → stop server (triggers coverage flush) → read coverage file.
-    /// This is used by the pool's CaptureCoverageTestByTest method.
+    /// Routes to signal flush (Normal confidence, no server restart) or process restart (Exact confidence).
     /// </summary>
     internal virtual async Task<ICoverageRunResult> RunSingleTestForCoverageAsync(
         string assembly, TestNode test, string testId, CoverageConfidence confidence)
     {
         DeleteCoverageFile();
 
+        if (confidence == CoverageConfidence.Exact)
+        {
+            return await RunSingleTestWithRestartAsync(assembly, test, testId, confidence).ConfigureAwait(false);
+        }
+
+        return await RunSingleTestWithSignalAsync(assembly, test, testId, confidence).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs a test and stops the server afterward, triggering ProcessExit which flushes coverage.
+    /// Used for <see cref="CoverageConfidence.Exact"/> (perTestInIsolation) mode.
+    /// </summary>
+    internal virtual async Task<ICoverageRunResult> RunSingleTestWithRestartAsync(
+        string assembly, TestNode test, string testId, CoverageConfidence confidence)
+    {
         try
         {
             try
@@ -212,6 +230,104 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         }
     }
 
+    /// <summary>
+    /// Runs a test and requests a coverage flush via signal file IPC, leaving the server running.
+    /// Used for <see cref="CoverageConfidence.Normal"/> (perTest) mode — ~10-20ms vs ~100-500ms for restart.
+    /// </summary>
+    internal virtual async Task<ICoverageRunResult> RunSingleTestWithSignalAsync(
+        string assembly, TestNode test, string testId, CoverageConfidence confidence)
+    {
+        try
+        {
+            var server = await GetOrCreateServerAsync(assembly).ConfigureAwait(false);
+            await server.RunTestsAsync(new[] { test }).ConfigureAwait(false);
+
+            var (coveredMutants, staticMutants) = await RequestCoverageFlushViaSignalAsync(testId).ConfigureAwait(false);
+
+            _logger.LogDebug(
+                "{RunnerId}: Test {TestId} covers {CoveredCount} mutants ({StaticCount} static) via signal flush",
+                _runnerId, testId, coveredMutants.Count, staticMutants.Count);
+
+            return CoverageRunResult.Create(
+                testId,
+                confidence,
+                coveredMutants,
+                staticMutants,
+                Array.Empty<int>());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{RunnerId}: Failed to capture coverage for test {TestId} via signal flush", _runnerId, testId);
+            return CoverageRunResult.Create(
+                testId,
+                CoverageConfidence.Dubious,
+                Array.Empty<int>(),
+                Array.Empty<int>(),
+                Array.Empty<int>());
+        }
+    }
+
+    /// <summary>
+    /// Requests MutantControl's background thread to flush coverage by writing a signal file,
+    /// then polls for the ack file. Returns (empty, empty) on timeout — treated as legitimate empty coverage.
+    /// </summary>
+    private async Task<(IReadOnlyList<int> CoveredMutants, IReadOnlyList<int> StaticMutants)> RequestCoverageFlushViaSignalAsync(string testId)
+    {
+        // Clean slate: remove any stale ack or coverage from previous runs
+        DeleteCoverageFile();
+        try
+        {
+            if (File.Exists(_signalAckFilePath)) File.Delete(_signalAckFilePath);
+        }
+        catch { }
+
+        // Write the signal file with a unique request ID so we can verify the ack
+        var requestId = Guid.NewGuid().ToString();
+        File.WriteAllText(_signalFilePath, requestId);
+
+        // Poll for ack file with 500ms total timeout
+        var sw = Stopwatch.StartNew();
+        while (!File.Exists(_signalAckFilePath) && sw.ElapsedMilliseconds < 500)
+        {
+            await Task.Delay(15).ConfigureAwait(false);
+        }
+
+        if (!File.Exists(_signalAckFilePath))
+        {
+            _logger.LogWarning("{RunnerId}: Signal flush timed out for test {TestId} — returning empty coverage", _runnerId, testId);
+            try { File.Delete(_signalFilePath); } catch { }
+            return (Array.Empty<int>(), Array.Empty<int>());
+        }
+
+        // Verify the ack matches our request (guards against stale acks)
+        try
+        {
+            var ackContent = File.ReadAllText(_signalAckFilePath).Trim();
+            if (ackContent != requestId)
+            {
+                _logger.LogWarning("{RunnerId}: Signal ack mismatch for test {TestId} — returning empty coverage", _runnerId, testId);
+                try { File.Delete(_signalFilePath); } catch { }
+                try { File.Delete(_signalAckFilePath); } catch { }
+                return (Array.Empty<int>(), Array.Empty<int>());
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{RunnerId}: Failed to read signal ack for test {TestId}", _runnerId, testId);
+            return (Array.Empty<int>(), Array.Empty<int>());
+        }
+
+        // Read coverage written by MutantControl.FlushCoverageToFileCore()
+        var result = ReadCoverageData();
+
+        // Cleanup signal, ack, and coverage files
+        try { File.Delete(_signalFilePath); } catch { }
+        try { File.Delete(_signalAckFilePath); } catch { }
+        DeleteCoverageFile();
+
+        return result;
+    }
+
     private void WriteMutantIdToFile(int mutantId)
     {
         try
@@ -236,10 +352,11 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
 
         ExternalEnvironmentVariables.Add(envVars);
 
-        // Add coverage filename when in coverage mode (MutantControl will combine with temp path)
+        // Add coverage filenames when in coverage mode (MutantControl combines with temp path)
         if (_coverageMode)
         {
             envVars["STRYKER_COVERAGE_FILE"] = Path.GetFileName(_coverageFilePath);
+            envVars["STRYKER_COVERAGE_SIGNAL_FILE"] = Path.GetFileName(_signalFilePath);
         }
 
         return envVars;
