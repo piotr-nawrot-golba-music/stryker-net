@@ -200,15 +200,12 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
     [TestMethod]
     public void Constructor_ShouldCreateMultipleRunners_WhenConcurrencyIsHigh()
     {
-        // Arrange
         var options = new Mock<IStrykerOptions>();
         options.Setup(x => x.Concurrency).Returns(4);
 
-        // Act
         using var pool = new MicrosoftTestPlatformRunnerPool(options.Object, NullLogger.Instance);
 
-        // Assert - pool should be created with 4 runners
-        pool.ShouldNotBeNull();
+        pool.Runners.Count().ShouldBe(4);
     }
 
     [TestMethod]
@@ -261,60 +258,29 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
         result.FailingTests.IsEveryTest.ShouldBeTrue();
     }
 
+    // Note: Testing CaptureCoverage aggregate mode with actual covered mutants requires real test
+    // execution against assemblies; that is covered by integration tests.
+
     [TestMethod]
-    public void CaptureCoverage_ShouldReturnNormalConfidenceWithCoverageData()
+    public void Constructor_ShouldCreateOneRunner_WhenLoggerIsProvided()
     {
-        // Arrange
         var options = new Mock<IStrykerOptions>();
         options.Setup(x => x.Concurrency).Returns(1);
+
         using var pool = new MicrosoftTestPlatformRunnerPool(options.Object, NullLogger.Instance);
-        var project = new Mock<IProjectAndTests>();
-        project.Setup(x => x.GetTestAssemblies()).Returns(Array.Empty<string>());
 
-        // Act
-        var coverage = pool.CaptureCoverage(project.Object).ToList();
-
-        // Assert
-        coverage.ShouldNotBeNull();
-        // Even with no tests discovered, the method should complete successfully
-        // Coverage results are created per test, so empty test set = empty coverage
-        coverage.ShouldBeEmpty();
-    }
-
-    // Note: Testing CaptureCoverage with multiple tests that cover different mutants is complex 
-    // because SingleMicrosoftTestPlatformRunner methods are not virtual/overridable for mocking.
-    // The coverage model is cumulative: all tests receive the aggregated coverage from all runners.
-    // Example: If Test1 covers mutant 1 and Test2 covers mutant 2, both tests will be reported
-    // as covering mutants 1 and 2 (cumulative). This behavior is tested in integration tests
-    // where real test runners execute against actual test assemblies.
-
-    [TestMethod]
-    public void Constructor_ShouldUseProvidedLogger()
-    {
-        // Arrange
-        var options = new Mock<IStrykerOptions>();
-        options.Setup(x => x.Concurrency).Returns(1);
-        var logger = NullLogger.Instance;
-
-        // Act
-        using var pool = new MicrosoftTestPlatformRunnerPool(options.Object, logger);
-
-        // Assert
-        pool.ShouldNotBeNull();
+        pool.Runners.Count().ShouldBe(1);
     }
 
     [TestMethod]
-    public void Constructor_ShouldUseDefaultLogger_WhenLoggerIsNull()
+    public void Constructor_ShouldCreateOneRunner_WhenLoggerIsNull()
     {
-        // Arrange
         var options = new Mock<IStrykerOptions>();
         options.Setup(x => x.Concurrency).Returns(1);
 
-        // Act
         using var pool = new MicrosoftTestPlatformRunnerPool(options.Object, null);
 
-        // Assert
-        pool.ShouldNotBeNull();
+        pool.Runners.Count().ShouldBe(1);
     }
 
     [TestMethod]

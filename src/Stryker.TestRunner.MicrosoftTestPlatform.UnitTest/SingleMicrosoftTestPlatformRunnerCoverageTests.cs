@@ -12,12 +12,24 @@ using Stryker.TestRunner.Tests;
 namespace Stryker.TestRunner.MicrosoftTestPlatform.UnitTest;
 
 [TestClass]
-public class SingleMicrosoftTestPlatformRunnerCoverageTests
+public class SingleMicrosoftTestPlatformRunnerCoverageTests : TestBase
 {
     private Dictionary<string, List<TestNode>> _testsByAssembly = null!;
     private Dictionary<string, MtpTestDescription> _testDescriptions = null!;
     private TestSet _testSet = null!;
     private object _discoveryLock = null!;
+    private readonly List<string> _tempFiles = [];
+
+    // Scatter runner IDs per process so parallel test processes don't share temp file names
+    private static int _nextRunnerId = (Environment.ProcessId & 0xFFFF) << 10;
+    private int NextRunnerId() => Interlocked.Increment(ref _nextRunnerId);
+
+    private string CoverageFilePath(int runnerId)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        _tempFiles.Add(path);
+        return path;
+    }
 
     [TestInitialize]
     public void Initialize()
@@ -28,162 +40,121 @@ public class SingleMicrosoftTestPlatformRunnerCoverageTests
         _discoveryLock = new object();
     }
 
+    [TestCleanup]
+    public void Cleanup()
+    {
+        foreach (var file in _tempFiles.Where(File.Exists))
+        {
+            File.Delete(file);
+        }
+        _tempFiles.Clear();
+    }
+
     [TestMethod]
     public async Task SetCoverageMode_ShouldEnableCoverageMode()
     {
-        var runnerId = 600;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
-        
-        try
-        {
-            // Create an existing coverage file that should be deleted
-            await File.WriteAllTextAsync(coverageFilePath, "1,2,3");
-            File.Exists(coverageFilePath).ShouldBeTrue("Setup: coverage file should exist before test");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
 
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        await File.WriteAllTextAsync(coverageFilePath, "1,2,3");
+        File.Exists(coverageFilePath).ShouldBeTrue("Setup: coverage file should exist before test");
 
-            // Create a test assembly to trigger server creation
-            var testAssembly = typeof(SingleMicrosoftTestPlatformRunnerCoverageTests).Assembly.Location;
-            await runner.DiscoverTestsAsync(testAssembly);
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            // Enable coverage mode
-            runner.SetCoverageMode(true);
+        var testAssembly = typeof(SingleMicrosoftTestPlatformRunnerCoverageTests).Assembly.Location;
+        await runner.DiscoverTestsAsync(testAssembly);
 
-            // The old coverage file should be deleted
-            File.Exists(coverageFilePath).ShouldBeFalse("Coverage file should be deleted when enabling coverage mode");
+        runner.SetCoverageMode(true);
 
-            // Servers should be disposed and will be recreated on next use with coverage env var
-            // Verify we can still discover tests (which recreates servers)
-            var result = await runner.DiscoverTestsAsync(testAssembly);
-            result.ShouldBeTrue("Server should be recreated successfully after enabling coverage mode");
+        File.Exists(coverageFilePath).ShouldBeFalse("Coverage file should be deleted when enabling coverage mode");
 
-            // Enabling again should still delete any stale coverage file (defensive cleanup)
-            await File.WriteAllTextAsync(coverageFilePath, "test");
-            runner.SetCoverageMode(true);
-            File.Exists(coverageFilePath).ShouldBeFalse("Should delete stale coverage file even when mode is already enabled");
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        var result = await runner.DiscoverTestsAsync(testAssembly);
+        result.ShouldBeTrue("Server should be recreated successfully after enabling coverage mode");
+
+        await File.WriteAllTextAsync(coverageFilePath, "test");
+        runner.SetCoverageMode(true);
+        File.Exists(coverageFilePath).ShouldBeFalse("Should delete stale coverage file even when mode is already enabled");
     }
 
     [TestMethod]
     public async Task SetCoverageMode_ShouldDisableCoverageMode()
     {
-        var runnerId = 601;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
-        
-        try
-        {
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
 
-            var testAssembly = typeof(SingleMicrosoftTestPlatformRunnerCoverageTests).Assembly.Location;
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            // Enable coverage mode first
-            runner.SetCoverageMode(true);
-            await runner.DiscoverTestsAsync(testAssembly);
-            
-            // Create a coverage file
-            await File.WriteAllTextAsync(coverageFilePath, "1,2,3");
-            File.Exists(coverageFilePath).ShouldBeTrue("Setup: coverage file should exist");
+        var testAssembly = typeof(SingleMicrosoftTestPlatformRunnerCoverageTests).Assembly.Location;
 
-            // Disable coverage mode
-            runner.SetCoverageMode(false);
+        runner.SetCoverageMode(true);
+        await runner.DiscoverTestsAsync(testAssembly);
 
-            // The coverage file should be deleted when changing modes (clean start)
-            File.Exists(coverageFilePath).ShouldBeFalse("Coverage file should be deleted when disabling coverage mode");
+        await File.WriteAllTextAsync(coverageFilePath, "1,2,3");
+        File.Exists(coverageFilePath).ShouldBeTrue("Setup: coverage file should exist");
 
-            // Servers should be disposed and will be recreated without coverage env var
-            var result = await runner.DiscoverTestsAsync(testAssembly);
-            result.ShouldBeTrue("Server should be recreated successfully after disabling coverage mode");
+        runner.SetCoverageMode(false);
 
-            // Disabling again should still delete any stale coverage file (defensive cleanup)
-            await File.WriteAllTextAsync(coverageFilePath, "test");
-            runner.SetCoverageMode(false);
-            File.Exists(coverageFilePath).ShouldBeFalse("Should delete stale coverage file even when mode is already disabled");
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        File.Exists(coverageFilePath).ShouldBeFalse("Coverage file should be deleted when disabling coverage mode");
+
+        var result = await runner.DiscoverTestsAsync(testAssembly);
+        result.ShouldBeTrue("Server should be recreated successfully after disabling coverage mode");
+
+        await File.WriteAllTextAsync(coverageFilePath, "test");
+        runner.SetCoverageMode(false);
+        File.Exists(coverageFilePath).ShouldBeFalse("Should delete stale coverage file even when mode is already disabled");
     }
 
     [TestMethod]
     public async Task SetCoverageMode_ShouldNoOp_WhenModeIsAlreadySet()
     {
-        var runnerId = 602;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
-        
-        try
-        {
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
 
-            var testAssembly = typeof(SingleMicrosoftTestPlatformRunnerCoverageTests).Assembly.Location;
-            await runner.DiscoverTestsAsync(testAssembly);
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            // Enable coverage mode
-            runner.SetCoverageMode(true);
-            File.Exists(coverageFilePath).ShouldBeFalse("Coverage file should be deleted on first enable");
+        var testAssembly = typeof(SingleMicrosoftTestPlatformRunnerCoverageTests).Assembly.Location;
+        await runner.DiscoverTestsAsync(testAssembly);
 
-            // Create a coverage file to verify defensive cleanup still happens
-            await File.WriteAllTextAsync(coverageFilePath, "test-data");
+        runner.SetCoverageMode(true);
+        File.Exists(coverageFilePath).ShouldBeFalse("Coverage file should be deleted on first enable");
 
-            // Try to enable again - servers should NOT be disposed, but stale coverage file should be deleted
-            runner.SetCoverageMode(true);
-            File.Exists(coverageFilePath).ShouldBeFalse("Stale coverage file should be deleted even when mode already enabled");
+        await File.WriteAllTextAsync(coverageFilePath, "test-data");
 
-            // Verify servers are still functional (not disposed)
-            var result = await runner.DiscoverTestsAsync(testAssembly);
-            result.ShouldBeTrue("Servers should still be functional after no-op");
-            
-            // Disable coverage mode
-            runner.SetCoverageMode(false);
-            
-            // Try to disable again - should do nothing (no server disposal)
-            runner.SetCoverageMode(false);
-            
-            // Verify servers are still functional
-            result = await runner.DiscoverTestsAsync(testAssembly);
-            result.ShouldBeTrue("Servers should still be functional after no-op disable");
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        runner.SetCoverageMode(true);
+        File.Exists(coverageFilePath).ShouldBeFalse("Stale coverage file should be deleted even when mode already enabled");
+
+        var result = await runner.DiscoverTestsAsync(testAssembly);
+        result.ShouldBeTrue("Servers should still be functional after no-op");
+
+        runner.SetCoverageMode(false);
+        runner.SetCoverageMode(false);
+
+        result = await runner.DiscoverTestsAsync(testAssembly);
+        result.ShouldBeTrue("Servers should still be functional after no-op disable");
     }
 
     [TestMethod]
     public async Task SetCoverageMode_ShouldRestartServers_WhenTogglingBetweenModes()
     {
-        var runnerId = 603;
+        var runnerId = NextRunnerId();
 
         using var runner = new SingleMicrosoftTestPlatformRunner(
             runnerId,
@@ -214,7 +185,7 @@ public class SingleMicrosoftTestPlatformRunnerCoverageTests
     public void ReadCoverageData_ShouldReturnEmpty_WhenFileDoesNotExist()
     {
         using var runner = new SingleMicrosoftTestPlatformRunner(
-            500,
+            NextRunnerId(),
             _testsByAssembly,
             _testDescriptions,
             _testSet,
@@ -230,238 +201,161 @@ public class SingleMicrosoftTestPlatformRunnerCoverageTests
     [TestMethod]
     public void ReadCoverageData_ShouldReturnEmpty_WhenFileIsEmpty()
     {
-        var runnerId = 501;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
+        File.WriteAllText(coverageFilePath, string.Empty);
 
-        try
-        {
-            File.WriteAllText(coverageFilePath, string.Empty);
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var result = runner.ReadCoverageData();
 
-            var result = runner.ReadCoverageData();
-
-            result.CoveredMutants.ShouldBeEmpty();
-            result.StaticMutants.ShouldBeEmpty();
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        result.CoveredMutants.ShouldBeEmpty();
+        result.StaticMutants.ShouldBeEmpty();
     }
 
     [TestMethod]
     public void ReadCoverageData_ShouldReturnEmpty_WhenFileContainsWhitespace()
     {
-        var runnerId = 502;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
+        File.WriteAllText(coverageFilePath, "   \n\t  ");
 
-        try
-        {
-            File.WriteAllText(coverageFilePath, "   \n\t  ");
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var result = runner.ReadCoverageData();
 
-            var result = runner.ReadCoverageData();
-
-            result.CoveredMutants.ShouldBeEmpty();
-            result.StaticMutants.ShouldBeEmpty();
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        result.CoveredMutants.ShouldBeEmpty();
+        result.StaticMutants.ShouldBeEmpty();
     }
 
     [TestMethod]
     public void ReadCoverageData_ShouldParseCoveredMutants()
     {
-        var runnerId = 503;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
+        File.WriteAllText(coverageFilePath, "1,2,3");
 
-        try
-        {
-            File.WriteAllText(coverageFilePath, "1,2,3");
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var result = runner.ReadCoverageData();
 
-            var result = runner.ReadCoverageData();
-
-            result.CoveredMutants.Count.ShouldBe(3);
-            result.CoveredMutants.ShouldContain(1);
-            result.CoveredMutants.ShouldContain(2);
-            result.CoveredMutants.ShouldContain(3);
-            result.StaticMutants.ShouldBeEmpty();
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        result.CoveredMutants.Count.ShouldBe(3);
+        result.CoveredMutants.ShouldContain(1);
+        result.CoveredMutants.ShouldContain(2);
+        result.CoveredMutants.ShouldContain(3);
+        result.StaticMutants.ShouldBeEmpty();
     }
 
     [TestMethod]
     public void ReadCoverageData_ShouldParseCoveredAndStaticMutants()
     {
-        var runnerId = 504;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
+        File.WriteAllText(coverageFilePath, "1,2,3;10,20");
 
-        try
-        {
-            File.WriteAllText(coverageFilePath, "1,2,3;10,20");
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var result = runner.ReadCoverageData();
 
-            var result = runner.ReadCoverageData();
+        result.CoveredMutants.Count.ShouldBe(3);
+        result.CoveredMutants.ShouldContain(1);
+        result.CoveredMutants.ShouldContain(2);
+        result.CoveredMutants.ShouldContain(3);
 
-            result.CoveredMutants.Count.ShouldBe(3);
-            result.CoveredMutants.ShouldContain(1);
-            result.CoveredMutants.ShouldContain(2);
-            result.CoveredMutants.ShouldContain(3);
-            
-            result.StaticMutants.Count.ShouldBe(2);
-            result.StaticMutants.ShouldContain(10);
-            result.StaticMutants.ShouldContain(20);
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        result.StaticMutants.Count.ShouldBe(2);
+        result.StaticMutants.ShouldContain(10);
+        result.StaticMutants.ShouldContain(20);
     }
 
     [TestMethod]
     public void ReadCoverageData_ShouldHandleSingleMutant()
     {
-        var runnerId = 505;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
+        File.WriteAllText(coverageFilePath, "42");
 
-        try
-        {
-            File.WriteAllText(coverageFilePath, "42");
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var result = runner.ReadCoverageData();
 
-            var result = runner.ReadCoverageData();
-
-            result.CoveredMutants.Count.ShouldBe(1);
-            result.CoveredMutants.ShouldContain(42);
-            result.StaticMutants.ShouldBeEmpty();
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        result.CoveredMutants.Count.ShouldBe(1);
+        result.CoveredMutants.ShouldContain(42);
+        result.StaticMutants.ShouldBeEmpty();
     }
 
     [TestMethod]
     public void ReadCoverageData_ShouldReturnEmptyCovered_WhenOnlyStaticMutantsPresent()
     {
-        var runnerId = 506;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
+        File.WriteAllText(coverageFilePath, ";5,6,7");
 
-        try
-        {
-            File.WriteAllText(coverageFilePath, ";5,6,7");
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var result = runner.ReadCoverageData();
 
-            var result = runner.ReadCoverageData();
-
-            result.CoveredMutants.ShouldBeEmpty();
-            result.StaticMutants.Count.ShouldBe(3);
-            result.StaticMutants.ShouldContain(5);
-            result.StaticMutants.ShouldContain(6);
-            result.StaticMutants.ShouldContain(7);
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        result.CoveredMutants.ShouldBeEmpty();
+        result.StaticMutants.Count.ShouldBe(3);
+        result.StaticMutants.ShouldContain(5);
+        result.StaticMutants.ShouldContain(6);
+        result.StaticMutants.ShouldContain(7);
     }
 
     [TestMethod]
     public void ReadCoverageData_ShouldHandleTrailingSemicolon()
     {
-        var runnerId = 507;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
+        File.WriteAllText(coverageFilePath, "1,2,3;");
 
-        try
-        {
-            File.WriteAllText(coverageFilePath, "1,2,3;");
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        var result = runner.ReadCoverageData();
 
-            var result = runner.ReadCoverageData();
-
-            result.CoveredMutants.Count.ShouldBe(3);
-            result.StaticMutants.ShouldBeEmpty();
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        result.CoveredMutants.Count.ShouldBe(3);
+        result.StaticMutants.ShouldBeEmpty();
     }
 
     [TestMethod]
@@ -494,7 +388,7 @@ public class SingleMicrosoftTestPlatformRunnerCoverageTests
     [TestMethod]
     public async Task StopAndRemoveServerAsync_ShouldRemoveServerFromDictionary()
     {
-        var runnerId = 610;
+        var runnerId = NextRunnerId();
         using var runner = new SingleMicrosoftTestPlatformRunner(
             runnerId,
             _testsByAssembly,
@@ -523,45 +417,34 @@ public class SingleMicrosoftTestPlatformRunnerCoverageTests
     [TestMethod]
     public void ReadCoverageData_ShouldReturnCoveredAndStaticMutants_FromFile()
     {
-        var runnerId = 620;
-        var coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{runnerId}.txt");
+        var runnerId = NextRunnerId();
+        var coverageFilePath = CoverageFilePath(runnerId);
 
-        try
-        {
-            using var runner = new SingleMicrosoftTestPlatformRunner(
-                runnerId,
-                _testsByAssembly,
-                _testDescriptions,
-                _testSet,
-                _discoveryLock,
-                NullLogger.Instance);
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            runnerId,
+            _testsByAssembly,
+            _testDescriptions,
+            _testSet,
+            _discoveryLock,
+            NullLogger.Instance);
 
-            File.WriteAllText(coverageFilePath, "1,2,3;10");
+        File.WriteAllText(coverageFilePath, "1,2,3;10");
 
-            var result = runner.ReadCoverageData();
+        var result = runner.ReadCoverageData();
 
-            result.CoveredMutants.Count.ShouldBe(3);
-            result.CoveredMutants.ShouldContain(1);
-            result.CoveredMutants.ShouldContain(2);
-            result.CoveredMutants.ShouldContain(3);
-            result.StaticMutants.Count.ShouldBe(1);
-            result.StaticMutants.ShouldContain(10);
-        }
-        finally
-        {
-            if (File.Exists(coverageFilePath))
-            {
-                File.Delete(coverageFilePath);
-            }
-        }
+        result.CoveredMutants.Count.ShouldBe(3);
+        result.CoveredMutants.ShouldContain(1);
+        result.CoveredMutants.ShouldContain(2);
+        result.CoveredMutants.ShouldContain(3);
+        result.StaticMutants.Count.ShouldBe(1);
+        result.StaticMutants.ShouldContain(10);
     }
 
     [TestMethod]
     public void ReadCoverageData_ShouldReturnEmpty_WhenNoCoverageFile()
     {
-        var runnerId = 621;
         using var runner = new SingleMicrosoftTestPlatformRunner(
-            runnerId,
+            NextRunnerId(),
             _testsByAssembly,
             _testDescriptions,
             _testSet,
