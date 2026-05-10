@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Stryker.Abstractions;
@@ -18,8 +19,8 @@ namespace Stryker.TestRunner.MicrosoftTestPlatform;
 /// </summary>
 public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverageCapture, IAsyncDisposable
 {
-    private readonly SemaphoreSlim _runnerAvailable;
-    private readonly ConcurrentBag<SingleMicrosoftTestPlatformRunner> _availableRunners = new();
+    private readonly Channel<SingleMicrosoftTestPlatformRunner> _runnerChannel;
+    private readonly SingleMicrosoftTestPlatformRunner[] _runners;
     private readonly ILogger _logger;
     private readonly int _countOfRunners;
     private readonly TestSet _testSet = new();
@@ -29,7 +30,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
     private readonly ISingleRunnerFactory _runnerFactory;
     private readonly IStrykerOptions _options;
 
-    public IEnumerable<SingleMicrosoftTestPlatformRunner> Runners => _availableRunners;
+    public IEnumerable<SingleMicrosoftTestPlatformRunner> Runners => _runners;
 
     public MicrosoftTestPlatformRunnerPool(IStrykerOptions options, ILogger? logger = null, ISingleRunnerFactory? runnerFactory = null)
     {
@@ -37,7 +38,16 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
         _options = options;
         _countOfRunners = Math.Max(1, options.Concurrency);
         _runnerFactory = runnerFactory ?? new DefaultRunnerFactory();
-        _runnerAvailable = new SemaphoreSlim(0, _countOfRunners);
+        _runners = new SingleMicrosoftTestPlatformRunner[_countOfRunners];
+        // Bounded channel with one slot per runner acts as both the queue and the semaphore:
+        // ReadAsync atomically dequeues (no retry loop needed) and TryWrite returns the runner.
+        _runnerChannel = Channel.CreateBounded<SingleMicrosoftTestPlatformRunner>(
+            new BoundedChannelOptions(_countOfRunners)
+            {
+                SingleReader = false,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.Wait
+            });
         _logger.LogWarning("The Microsoft Test Platform testrunner is currently in preview. Results should be verified since this feature is still being tested.");
 
         Initialize();
@@ -48,7 +58,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
     private async Task ResetTestProcessesAsync()
     {
         _logger.LogDebug("Resetting all test server processes in the pool");
-        await Task.WhenAll(_availableRunners.Select(runner => runner.ResetServerAsync())).ConfigureAwait(false);
+        await Task.WhenAll(_runners.Select(runner => runner.ResetServerAsync())).ConfigureAwait(false);
         _logger.LogDebug("All test server processes have been reset");
     }
 
@@ -65,8 +75,8 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
                 _discoveryLock,
                 _logger,
                 _options);
-            _availableRunners.Add(runner);
-            _runnerAvailable.Release();
+            _runners[i] = runner;
+            _runnerChannel.Writer.TryWrite(runner);
         });
     }
 
@@ -121,7 +131,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
     {
         _logger.LogInformation("Starting aggregate coverage capture for MTP runner");
 
-        SetCoverageModeForAvailableRunners(true);
+        SetCoverageModeForAllRunners(true);
 
         try
         {
@@ -137,7 +147,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
             var allCoveredMutants = new HashSet<int>();
             var allStaticMutants = new HashSet<int>();
 
-            foreach (var runner in _availableRunners)
+            foreach (var runner in _runners)
             {
                 var (coveredMutants, staticMutants) = runner.ReadCoverageData();
                 allCoveredMutants.UnionWith(coveredMutants);
@@ -157,7 +167,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
         }
         finally
         {
-            SetCoverageModeForAvailableRunners(false);
+            SetCoverageModeForAllRunners(false);
         }
     }
 
@@ -167,7 +177,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
     {
         _logger.LogInformation("Starting per-test coverage capture for MTP runner");
 
-        SetCoverageModeForAvailableRunners(true);
+        SetCoverageModeForAllRunners(true);
 
         try
         {
@@ -221,7 +231,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
         }
         finally
         {
-            SetCoverageModeForAvailableRunners(false);
+            SetCoverageModeForAllRunners(false);
         }
     }
 
@@ -246,55 +256,51 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
         const int maxWaitTimeSeconds = 300;
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(maxWaitTimeSeconds));
 
-        // Single CTS shared across retries so the timeout is a hard upper bound
-        while (true)
+        SingleMicrosoftTestPlatformRunner runner;
+        try
         {
-            try
-            {
-                await _runnerAvailable.WaitAsync(cts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                throw new TimeoutException($"Timed out waiting for an available test runner after {maxWaitTimeSeconds} seconds. Available runners: {_availableRunners.Count}, Total runners: {_countOfRunners}");
-            }
+            // ReadAsync atomically dequeues one runner; no retry loop needed.
+            runner = await _runnerChannel.Reader.ReadAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException($"Timed out waiting for an available test runner after {maxWaitTimeSeconds} seconds. Total runners: {_countOfRunners}");
+        }
+        catch (ChannelClosedException ex)
+        {
+            throw new ObjectDisposedException(nameof(MicrosoftTestPlatformRunnerPool), ex);
+        }
 
-            if (!_availableRunners.TryTake(out var runner))
-            {
-                _runnerAvailable.Release();
-                continue;
-            }
-
-            try
-            {
-                return await task(runner).ConfigureAwait(false);
-            }
-            finally
-            {
-                _availableRunners.Add(runner);
-                _runnerAvailable.Release();
-            }
+        try
+        {
+            return await task(runner).ConfigureAwait(false);
+        }
+        finally
+        {
+            // TryWrite always succeeds here: we own exactly one slot in the bounded channel.
+            // If it returns false the channel was completed (disposal), which is fine —
+            // the runner will be disposed via _runners[].
+            _runnerChannel.Writer.TryWrite(runner);
         }
     }
 
-    private void SetCoverageModeForAvailableRunners(bool enabled)
+    private void SetCoverageModeForAllRunners(bool enabled)
     {
-        foreach (var runner in _availableRunners)
+        foreach (var runner in _runners)
             runner.SetCoverageMode(enabled);
     }
 
     public void Dispose()
     {
-        foreach (var runner in _availableRunners)
-        {
+        _runnerChannel.Writer.TryComplete();
+        foreach (var runner in _runners)
             runner.Dispose();
-        }
-        _runnerAvailable.Dispose();
     }
 
     public async ValueTask DisposeAsync()
     {
-        await Task.WhenAll(_availableRunners.Select(r => r.DisposeAsync().AsTask())).ConfigureAwait(false);
-        _runnerAvailable.Dispose();
+        _runnerChannel.Writer.TryComplete();
+        await Task.WhenAll(_runners.Select(r => r.DisposeAsync().AsTask())).ConfigureAwait(false);
     }
 }
 
