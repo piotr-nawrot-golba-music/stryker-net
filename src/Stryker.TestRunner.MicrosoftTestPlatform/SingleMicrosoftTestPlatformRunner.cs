@@ -16,9 +16,8 @@ namespace Stryker.TestRunner.MicrosoftTestPlatform;
 /// Maintains persistent test server connections per assembly to reduce process startup overhead.
 /// Uses file-based mutant control to allow changing the active mutant without restarting processes.
 /// </summary>
-public class SingleMicrosoftTestPlatformRunner : IDisposable
+public class SingleMicrosoftTestPlatformRunner : IDisposable, IAsyncDisposable
 {
-    private readonly int _id;
     private readonly Dictionary<string, List<TestNode>> _testsByAssembly;
     private readonly Dictionary<string, MtpTestDescription> _testDescriptions;
     private readonly TestSet _testSet;
@@ -44,7 +43,6 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         ILogger logger,
         IStrykerOptions? options = null)
     {
-        _id = id;
         _testsByAssembly = testsByAssembly;
         _testDescriptions = testDescriptions;
         _testSet = testSet;
@@ -53,9 +51,9 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         _options = options;
 
         // Create unique file paths for this runner to communicate with the test process
-        _mutantFilePath = Path.Combine(Path.GetTempPath(), $"stryker-mutant-{_id}.txt");
-        _coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{_id}.txt");
-        _runnerId = $"MtpRunner-{_id}";
+        _mutantFilePath = Path.Combine(Path.GetTempPath(), $"stryker-mutant-{id}.txt");
+        _coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{id}.txt");
+        _runnerId = $"MtpRunner-{id}";
 
         // Initialize with no active mutation
         WriteMutantIdToFile(-1);
@@ -96,21 +94,22 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
     public async Task ResetServerAsync()
     {
         _logger.LogDebug("{RunnerId}: Resetting test servers to reload assemblies", _runnerId);
-        
+
+        List<AssemblyTestServer> servers;
         await _serverLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            foreach (var server in _assemblyServers.Values)
-            {
-                server.Dispose();
-            }
+            if (_disposed) return;
+            servers = [.._assemblyServers.Values];
             _assemblyServers.Clear();
         }
         finally
         {
             _serverLock.Release();
         }
-        
+
+        await Task.WhenAll(servers.Select(s => s.DisposeAsync().AsTask())).ConfigureAwait(false);
+
         _logger.LogDebug("{RunnerId}: Test servers reset complete", _runnerId);
     }
 
@@ -347,30 +346,83 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
 
     private async Task<AssemblyTestServer> GetOrCreateServerAsync(string assembly)
     {
+        // Phase 1: check cache and snapshot env vars under lock, then release.
+        // Holding the lock across StartAsync (which can take ~30s) would block
+        // SetCoverageMode, ResetServerAsync and Dispose for the entire startup duration.
+        Dictionary<string, string?> environmentVariables;
+
         await _serverLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(SingleMicrosoftTestPlatformRunner));
+
             if (_assemblyServers.TryGetValue(assembly, out var existing) && existing.IsInitialized)
-            {
                 return existing;
-            }
 
-            var environmentVariables = BuildEnvironmentVariables();
-            var server = new AssemblyTestServer(assembly, environmentVariables, _logger, _runnerId, _options);
-
-            var started = await server.StartAsync().ConfigureAwait(false);
-            if (!started)
-            {
-                throw new InvalidOperationException($"Failed to start test server for {assembly}");
-            }
-
-            _assemblyServers[assembly] = server;
-            return server;
+            // Snapshot env vars while _coverageMode is stable under the lock.
+            // SetCoverageMode is always called before GetOrCreateServerAsync in the
+            // coverage-capture lifecycle, so this snapshot is consistent.
+            environmentVariables = BuildEnvironmentVariables();
         }
         finally
         {
             _serverLock.Release();
         }
+
+        // Phase 2: start the server outside the lock (long async I/O).
+        var server = new AssemblyTestServer(assembly, environmentVariables, _logger, _runnerId, _options);
+        var started = await server.StartAsync().ConfigureAwait(false);
+        if (!started)
+            throw new InvalidOperationException($"Failed to start test server for {assembly}");
+
+        // Phase 3: publish under lock. Guard against disposal or a concurrent start
+        // winning the race during Phase 2 (rare but theoretically possible).
+        AssemblyTestServer? serverToDiscard = null;
+        AssemblyTestServer result;
+
+        try
+        {
+            await _serverLock.WaitAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Runner was disposed while server was starting.
+            await server.StopAsync().ConfigureAwait(false);
+            throw new ObjectDisposedException(nameof(SingleMicrosoftTestPlatformRunner));
+        }
+
+        try
+        {
+            if (_disposed)
+            {
+                serverToDiscard = server;
+                result = server; // placeholder; ObjectDisposedException thrown below
+            }
+            else if (_assemblyServers.TryGetValue(assembly, out var winner) && winner.IsInitialized)
+            {
+                serverToDiscard = server;
+                result = winner;
+            }
+            else
+            {
+                _assemblyServers[assembly] = server;
+                result = server;
+            }
+        }
+        finally
+        {
+            _serverLock.Release();
+        }
+
+        // Cleanup outside the lock so StopAsync does not hold _serverLock.
+        if (serverToDiscard is not null)
+            await serverToDiscard.StopAsync().ConfigureAwait(false);
+
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(SingleMicrosoftTestPlatformRunner));
+
+        return result;
     }
 
     private async Task<bool> DiscoverTestsInternalAsync(string assembly)
@@ -447,6 +499,12 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         
         if (server is not null)
         {
+            if (_disposed)
+            {
+                _logger.LogDebug("{RunnerId}: Runner disposed, skipping server restart for {Assembly}", _runnerId, Path.GetFileName(assembly));
+                return;
+            }
+
             _logger.LogDebug("{RunnerId}: Restarting test server for {Assembly} after timeout", _runnerId, Path.GetFileName(assembly));
             try
             {
@@ -696,10 +754,10 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
                 ? TimeSpan.FromTicks(duration.Ticks / finishedTests.Count)
                 : TimeSpan.Zero;
 
-            foreach (var testResult in finishedTests.Where(tr => _testDescriptions.ContainsKey(tr.Node.Uid)))
+            foreach (var testResult in finishedTests)
             {
-                var testDescription = _testDescriptions[testResult.Node.Uid];
-                testDescription.RegisterInitialTestResult(new MtpTestResult(perTestDuration));
+                if (_testDescriptions.TryGetValue(testResult.Node.Uid, out var testDescription))
+                    testDescription.RegisterInitialTestResult(new MtpTestResult(perTestDuration));
             }
         }
 
@@ -746,28 +804,32 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
 
     public virtual void Dispose(bool disposing)
     {
-        if (_disposed)
-        {
-            return;
-        }
-
         if (disposing)
         {
+            List<AssemblyTestServer> servers;
+
             _serverLock.Wait();
             try
             {
-                foreach (var server in _assemblyServers.Values)
-                {
-                    server.Dispose();
-                }
+                if (_disposed) return;
+                _disposed = true;
+                servers = [.._assemblyServers.Values];
                 _assemblyServers.Clear();
             }
             finally
             {
                 _serverLock.Release();
+                // _serverLock is intentionally not disposed here.
+                // SemaphoreSlim only allocates a kernel handle when AvailableWaitHandle is accessed,
+                // which we never do. Calling Dispose() after Release() would cause ObjectDisposedException
+                // for any thread concurrently waiting on WaitAsync().
             }
 
-            _serverLock.Dispose();
+            // Dispose servers outside the lock so StopAsync doesn't hold _serverLock during teardown
+            foreach (var server in servers)
+            {
+                server.Dispose();
+            }
 
             // Clean up temp files
             try
@@ -787,7 +849,39 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
                 _logger.LogWarning(ex, "{RunnerId}: Failed to clean up temp files", _runnerId);
             }
         }
-        _disposed = true;
+    }
+
+    public virtual async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+
+        List<AssemblyTestServer> servers;
+
+        await _serverLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_disposed) return;
+            _disposed = true;
+            servers = [.._assemblyServers.Values];
+            _assemblyServers.Clear();
+        }
+        finally
+        {
+            _serverLock.Release();
+        }
+
+        // Dispose servers in parallel outside the lock so StopAsync doesn't hold _serverLock
+        await Task.WhenAll(servers.Select(s => s.DisposeAsync().AsTask())).ConfigureAwait(false);
+
+        try
+        {
+            if (File.Exists(_mutantFilePath)) File.Delete(_mutantFilePath);
+            if (File.Exists(_coverageFilePath)) File.Delete(_coverageFilePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{RunnerId}: Failed to clean up temp files", _runnerId);
+        }
     }
 }
 

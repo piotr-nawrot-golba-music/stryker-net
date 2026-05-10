@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Stryker.Abstractions;
 using Stryker.Abstractions.Options;
@@ -15,7 +16,7 @@ namespace Stryker.TestRunner.MicrosoftTestPlatform;
 /// Manages a pool of MicrosoftTestPlatformRunner instances to enable parallel mutation testing
 /// with isolated environment variables per runner.
 /// </summary>
-public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
+public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverageCapture, IAsyncDisposable
 {
     private readonly SemaphoreSlim _runnerAvailable;
     private readonly ConcurrentBag<SingleMicrosoftTestPlatformRunner> _availableRunners = new();
@@ -42,11 +43,12 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
         Initialize();
     }
 
-    public void ResetTestProcesses()
+    public void ResetTestProcesses() => ResetTestProcessesAsync().GetAwaiter().GetResult();
+
+    private async Task ResetTestProcessesAsync()
     {
         _logger.LogDebug("Resetting all test server processes in the pool");
-        var tasks = _availableRunners.Select(runner => runner.ResetServerAsync());
-        Task.WhenAll(tasks).Wait();
+        await Task.WhenAll(_availableRunners.Select(runner => runner.ResetServerAsync())).ConfigureAwait(false);
         _logger.LogDebug("All test server processes have been reset");
     }
 
@@ -92,43 +94,45 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
         var results = await RunThisAsync(runner => runner.InitialTestAsync(project)).ConfigureAwait(false);
 
         // reset all test processes after the initial test run
-        ResetTestProcesses();
+        await ResetTestProcessesAsync().ConfigureAwait(false);
 
         return results;
     }
 
-    public IEnumerable<ICoverageRunResult> CaptureCoverage(IProjectAndTests project)
+    /// <inheritdoc cref="ITestRunner.CaptureCoverage"/>
+    /// <remarks>Delegates to <see cref="CaptureCoverageAsync"/> to avoid duplicating logic.</remarks>
+    public IEnumerable<ICoverageRunResult> CaptureCoverage(IProjectAndTests project) =>
+        CaptureCoverageAsync(project).GetAwaiter().GetResult();
+
+    public async Task<IEnumerable<ICoverageRunResult>> CaptureCoverageAsync(IProjectAndTests project)
     {
         if (_options.OptimizationMode.HasFlag(OptimizationModes.CoverageBasedTest))
         {
             var confidence = _options.OptimizationMode.HasFlag(OptimizationModes.CaptureCoveragePerTest)
                 ? CoverageConfidence.Exact
                 : CoverageConfidence.Normal;
-            return CaptureCoverageTestByTest(project, confidence);
+            return await CaptureCoverageTestByTestAsync(project, confidence).ConfigureAwait(false);
         }
 
-        return CaptureCoverageInOneGo(project);
+        return await CaptureCoverageInOneGoAsync(project).ConfigureAwait(false);
     }
 
-    private IEnumerable<ICoverageRunResult> CaptureCoverageInOneGo(IProjectAndTests project)
+    private async Task<IEnumerable<ICoverageRunResult>> CaptureCoverageInOneGoAsync(IProjectAndTests project)
     {
         _logger.LogInformation("Starting aggregate coverage capture for MTP runner");
 
-        foreach (var runner in _availableRunners)
-        {
-            runner.SetCoverageMode(true);
-        }
+        SetCoverageModeForAvailableRunners(true);
 
         try
         {
-            var testResult = RunThisAsync(runner => runner.InitialTestAsync(project)).GetAwaiter().GetResult();
+            var testResult = await RunThisAsync(runner => runner.InitialTestAsync(project)).ConfigureAwait(false);
 
             if (testResult.FailingTests.IsEveryTest)
             {
                 _logger.LogWarning("Coverage test run failed: {Message}", testResult.ResultMessage);
             }
 
-            ResetTestProcesses();
+            await ResetTestProcessesAsync().ConfigureAwait(false);
 
             var allCoveredMutants = new HashSet<int>();
             var allStaticMutants = new HashSet<int>();
@@ -136,14 +140,8 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
             foreach (var runner in _availableRunners)
             {
                 var (coveredMutants, staticMutants) = runner.ReadCoverageData();
-                foreach (var mutantId in coveredMutants)
-                {
-                    allCoveredMutants.Add(mutantId);
-                }
-                foreach (var mutantId in staticMutants)
-                {
-                    allStaticMutants.Add(mutantId);
-                }
+                allCoveredMutants.UnionWith(coveredMutants);
+                allStaticMutants.UnionWith(staticMutants);
             }
 
             _logger.LogInformation("Aggregate coverage capture complete: {CoveredCount} mutations covered, {StaticCount} static mutations",
@@ -159,23 +157,17 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
         }
         finally
         {
-            foreach (var runner in _availableRunners)
-            {
-                runner.SetCoverageMode(false);
-            }
+            SetCoverageModeForAvailableRunners(false);
         }
     }
 
-    private IEnumerable<ICoverageRunResult> CaptureCoverageTestByTest(
+    private async Task<IEnumerable<ICoverageRunResult>> CaptureCoverageTestByTestAsync(
         IProjectAndTests project,
         CoverageConfidence confidence)
     {
         _logger.LogInformation("Starting per-test coverage capture for MTP runner");
 
-        foreach (var runner in _availableRunners)
-        {
-            runner.SetCoverageMode(true);
-        }
+        SetCoverageModeForAvailableRunners(true);
 
         try
         {
@@ -208,7 +200,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
 
             var results = new ConcurrentBag<ICoverageRunResult>();
 
-            Parallel.ForEachAsync(allTests,
+            await Parallel.ForEachAsync(allTests,
                 new ParallelOptions { MaxDegreeOfParallelism = _countOfRunners },
                 async (testInfo, _) =>
                 {
@@ -219,7 +211,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
                         .ConfigureAwait(false);
 
                     results.Add(result);
-                }).GetAwaiter().GetResult();
+                }).ConfigureAwait(false);
 
             _logger.LogInformation(
                 "Per-test coverage capture complete: {TestCount} tests captured",
@@ -229,10 +221,7 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
         }
         finally
         {
-            foreach (var runner in _availableRunners)
-            {
-                runner.SetCoverageMode(false);
-            }
+            SetCoverageModeForAvailableRunners(false);
         }
     }
 
@@ -287,12 +276,24 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
         }
     }
 
+    private void SetCoverageModeForAvailableRunners(bool enabled)
+    {
+        foreach (var runner in _availableRunners)
+            runner.SetCoverageMode(enabled);
+    }
+
     public void Dispose()
     {
         foreach (var runner in _availableRunners)
         {
             runner.Dispose();
         }
+        _runnerAvailable.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await Task.WhenAll(_availableRunners.Select(r => r.DisposeAsync().AsTask())).ConfigureAwait(false);
         _runnerAvailable.Dispose();
     }
 }

@@ -8,7 +8,7 @@ namespace Stryker.TestRunner.MicrosoftTestPlatform;
 /// Manages a persistent test server connection for a single assembly.
 /// The server process is started once and reused across multiple test runs.
 /// </summary>
-internal sealed class AssemblyTestServer : IDisposable
+internal sealed class AssemblyTestServer : IDisposable, IAsyncDisposable
 {
     private readonly string _assembly;
     private readonly Dictionary<string, string?> _environmentVariables;
@@ -22,7 +22,7 @@ internal sealed class AssemblyTestServer : IDisposable
     private IDisposable? _connection;
     private ITestingPlatformClient? _client;
     private bool _isInitialized;
-    private bool _disposed;
+    private int _disposed; // 0 = alive, 1 = disposed; use Interlocked to coordinate Dispose/DisposeAsync
 
     public AssemblyTestServer(
         string assembly,
@@ -131,16 +131,15 @@ internal sealed class AssemblyTestServer : IDisposable
         }
 
         var runId = Guid.NewGuid();
-        var testResults = new System.Collections.Concurrent.ConcurrentBag<TestNodeUpdate>();
+        var testResults = new List<TestNodeUpdate>();
 
         Func<TestNodeUpdate[], Task> onUpdate = updates =>
         {
-            foreach (var update in updates)
-            {
-                testResults.Add(update);
-            }
+            lock (testResults) { testResults.AddRange(updates); }
             return Task.CompletedTask;
         };
+
+        List<TestNodeUpdate> Snapshot() { lock (testResults) { return [..testResults]; } }
 
         if (timeout.HasValue)
         {
@@ -154,16 +153,16 @@ internal sealed class AssemblyTestServer : IDisposable
             catch (TimeoutException ex)
             {
                 _logger.LogDebug(ex, "{RunnerId}: Test run RPC call timed out for {Assembly}", _runnerId, _assembly);
-                return (testResults.ToList(), true);
+                return (Snapshot(), true);
             }
 
             var completed = await executeTestsResponse.WaitCompletionAsync(timeout.Value).ConfigureAwait(false);
-            return (testResults.ToList(), !completed);
+            return (Snapshot(), !completed);
         }
 
         var response = await _client.RunTestsAsync(runId, onUpdate, testsToRun).ConfigureAwait(false);
         await response.WaitCompletionAsync().ConfigureAwait(false);
-        return (testResults.ToList(), false);
+        return (Snapshot(), false);
     }
 
     public async Task RestartAsync(bool force = false)
@@ -237,13 +236,16 @@ internal sealed class AssemblyTestServer : IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
-        {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-        }
-
-        _disposed = true;
         StopAsync().GetAwaiter().GetResult();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        await StopAsync().ConfigureAwait(false);
     }
 }
 
