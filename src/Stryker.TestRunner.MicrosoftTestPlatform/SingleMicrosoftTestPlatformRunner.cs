@@ -663,7 +663,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable, IAsyncDisposable
             timeout = CalculateAssemblyTimeout(discoveredTests, timeoutCalc, assembly);
         }
 
-        var (testResults, timedOut) = await RunAssemblyTestsInternalAsync(assembly, null, timeout).ConfigureAwait(false);
+        var (testResults, timedOut) = await RunAssemblyTestsInternalAsync(assembly, null, timeout, registerInitialResults: true).ConfigureAwait(false);
         
         return (testResults as TestRunResult, timedOut, discoveredTests);
     }
@@ -694,7 +694,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable, IAsyncDisposable
             var (testResults, timedOut) = await server.RunTestsAsync(testsToRun, timeout).ConfigureAwait(false);
 
             var duration = DateTime.UtcNow - startTime;
-            var result = BuildTestRunResult(testResults, tests?.Count ?? 0, duration);
+            var result = BuildTestRunResult(testResults, tests?.Count ?? 0, duration, registerInitialResults);
 
             return (result, timedOut);
         }
@@ -722,7 +722,8 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable, IAsyncDisposable
     internal TestRunResult BuildTestRunResult(
         IReadOnlyCollection<TestNodeUpdate> testResults,
         int totalDiscoveredTests,
-        TimeSpan duration)
+        TimeSpan duration,
+        bool registerInitialResults = false)
     {
         var finishedTests = testResults
             .Where(x => TestNodeStates.IsFinished(x.Node.ExecutionState))
@@ -740,15 +741,18 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable, IAsyncDisposable
 
         lock (_discoveryLock)
         {
-            // MTP doesn't report per-test timing, so approximate with the average
-            var perTestDuration = finishedTests.Count > 0
-                ? TimeSpan.FromTicks(duration.Ticks / finishedTests.Count)
-                : TimeSpan.Zero;
-
-            foreach (var testResult in finishedTests)
+            if (registerInitialResults)
             {
-                if (_testDescriptions.TryGetValue(testResult.Node.Uid, out var testDescription))
-                    testDescription.RegisterInitialTestResult(new MtpTestResult(perTestDuration));
+                // MTP doesn't report per-test timing, so approximate with the average
+                var perTestDuration = finishedTests.Count > 0
+                    ? TimeSpan.FromTicks(duration.Ticks / finishedTests.Count)
+                    : TimeSpan.Zero;
+
+                foreach (var testResult in finishedTests)
+                {
+                    if (_testDescriptions.TryGetValue(testResult.Node.Uid, out var testDescription))
+                        testDescription.RegisterInitialTestResult(new MtpTestResult(perTestDuration));
+                }
             }
         }
 
