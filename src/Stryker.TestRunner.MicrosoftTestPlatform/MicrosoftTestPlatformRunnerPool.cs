@@ -157,13 +157,21 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
             _logger.LogInformation("Aggregate coverage capture complete: {CoveredCount} mutations covered, {StaticCount} static mutations",
                 allCoveredMutants.Count, allStaticMutants.Count);
 
-            return _testDescriptions.Values.Select(testDescription =>
+            // Snapshot test IDs under the discovery lock to avoid enumerating the shared
+            // dictionary lazily on the caller's thread (where discovery could mutate it).
+            List<string> testIds;
+            lock (_discoveryLock)
+            {
+                testIds = _testDescriptions.Values.Select(td => td.Id).ToList();
+            }
+
+            return testIds.Select(id =>
                 CoverageRunResult.Create(
-                    testDescription.Id,
+                    id,
                     CoverageConfidence.Normal,
                     allCoveredMutants,
                     allStaticMutants,
-                    []));
+                    [])).ToList();
         }
         finally
         {

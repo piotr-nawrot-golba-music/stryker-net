@@ -101,16 +101,18 @@ internal sealed class AssemblyTestServer : IDisposable, IAsyncDisposable
         }
 
         var discoveryId = Guid.NewGuid();
-        List<TestNodeUpdate> discoveredResults = [];
+        var discoveredResults = new List<TestNodeUpdate>();
 
         var discoverTestsResponse = await _client.DiscoverTestsAsync(discoveryId, updates =>
         {
-            discoveredResults.AddRange(updates);
+            lock (discoveredResults) { discoveredResults.AddRange(updates); }
             return Task.CompletedTask;
         }).ConfigureAwait(false);
 
         await discoverTestsResponse.WaitCompletionAsync().ConfigureAwait(false);
 
+        // After WaitCompletionAsync, the RPC dispatch loop has processed the completion
+        // notification and no further callbacks for this discovery run will fire.
         return discoveredResults
             .Where(x => x.Node.ExecutionState is TestNodeStates.Discovered)
             .Select(x => x.Node)

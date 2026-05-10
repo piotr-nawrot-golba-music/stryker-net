@@ -485,43 +485,34 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable, IAsyncDisposable
         _logger.LogDebug("{RunnerId}: Test run timed out for {Assembly}", _runnerId, Path.GetFileName(assembly));
 
         allTimedOutTests.AddRange(discoveredTests.Select(t => t.Uid));
-        
-        AssemblyTestServer? server;
+
+        // Remove the timed-out server from the map under lock so the next test run gets a
+        // fresh server. Do NOT restart the server reference captured here — if the runner
+        // was disposed concurrently, AssemblyTestServer.Interlocked-disposed flag prevents
+        // further disposal, so calling StartAsync on it would leak the new process.
+        AssemblyTestServer? server = null;
         await _serverLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (_disposed) return;
             _assemblyServers.TryGetValue(assembly, out server);
+            _assemblyServers.Remove(assembly);
         }
         finally
         {
             _serverLock.Release();
         }
-        
+
         if (server is not null)
         {
-            if (_disposed)
-            {
-                _logger.LogDebug("{RunnerId}: Runner disposed, skipping server restart for {Assembly}", _runnerId, Path.GetFileName(assembly));
-                return;
-            }
-
-            _logger.LogDebug("{RunnerId}: Restarting test server for {Assembly} after timeout", _runnerId, Path.GetFileName(assembly));
+            _logger.LogDebug("{RunnerId}: Stopping timed-out server for {Assembly}; a fresh server will be created on next use", _runnerId, Path.GetFileName(assembly));
             try
             {
-                await server.RestartAsync(force: true).ConfigureAwait(false);
+                await server.DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "{RunnerId}: Failed to restart test server for {Assembly} after timeout. Creating a new server on next use.", _runnerId, Path.GetFileName(assembly));
-                await _serverLock.WaitAsync().ConfigureAwait(false);
-                try
-                {
-                    _assemblyServers.Remove(assembly);
-                }
-                finally
-                {
-                    _serverLock.Release();
-                }
+                _logger.LogDebug(ex, "{RunnerId}: Failed to dispose timed-out server for {Assembly}", _runnerId, Path.GetFileName(assembly));
             }
         }
     }
