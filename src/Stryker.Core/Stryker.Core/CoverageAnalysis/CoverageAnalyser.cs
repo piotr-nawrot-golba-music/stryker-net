@@ -19,6 +19,10 @@ public class CoverageAnalyser : ICoverageAnalyser
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
+    public void DetermineTestCoverage(IStrykerOptions options, IProjectAndTests project, ITestRunner runner, IEnumerable<IMutant> mutants,
+        ITestIdentifiers resultFailingTests) =>
+        DetermineTestCoverageAsync(options, project, runner, mutants, resultFailingTests).GetAwaiter().GetResult();
+
     public async Task DetermineTestCoverageAsync(IStrykerOptions options, IProjectAndTests project, ITestRunner runner, IEnumerable<IMutant> mutants,
         ITestIdentifiers resultFailingTests)
     {
