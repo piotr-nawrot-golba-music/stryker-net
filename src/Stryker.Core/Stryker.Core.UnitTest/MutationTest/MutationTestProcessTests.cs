@@ -136,7 +136,7 @@ public class MutationTestProcessTests : TestBase
         var target = new MutationTestProcess(mutationExecutor, coverageAnalyzer, mutationProcessMock, TestLoggerFactory.CreateLogger<MutationTestProcess>());
 
         target.Initialize(Input, options, null);
-        target.GetCoverage();
+        await target.GetCoverageAsync();
         await target.TestAsync(TestScenario.GetCoveredMutants());
 
         TestScenario.GetMutantStatus(1).ShouldBe(MutantStatus.Survived);
@@ -181,7 +181,7 @@ public class MutationTestProcessTests : TestBase
         var target = new MutationTestProcess(mutationExecutor, coverageAnalyzerMock2.Object, mutationProcessMock, TestLoggerFactory.CreateLogger<MutationTestProcess>());
 
         target.Initialize(Input, options, null);
-        target.GetCoverage();
+        await target.GetCoverageAsync();
         await target.TestAsync(TestScenario.GetMutants());
 
         TestScenario.GetMutantStatus(1).ShouldBe(MutantStatus.Survived);
@@ -227,7 +227,7 @@ public class MutationTestProcessTests : TestBase
         var target = new MutationTestProcess(executor, coverageAnalyzer, mutationProcessMock, TestLoggerFactory.CreateLogger<MutationTestProcess>());
         // test mutants
         target.Initialize(Input, options, null);
-        target.GetCoverage();
+        await target.GetCoverageAsync();
 
         var mutantsToTest = Input.SourceProjectInfo.ProjectContents.Mutants
             .Where(m => m.ResultStatus == MutantStatus.Pending)
@@ -281,7 +281,7 @@ public class MutationTestProcessTests : TestBase
 
         // test mutants
         target.Initialize(Input, options, null);
-        target.GetCoverage();
+        await target.GetCoverageAsync();
 
         await target.TestAsync(Input.SourceProjectInfo.ProjectContents.Mutants);
         // first mutant should be marked as survived
@@ -289,7 +289,7 @@ public class MutationTestProcessTests : TestBase
     }
 
     [TestMethod]
-    public void ShouldNotKillMutantIfOnlyCoveredByFailingTest()
+    public async Task ShouldNotKillMutantIfOnlyCoveredByFailingTest()
     {
         var basePath = Path.Combine(FilesystemRoot, "ExampleProject.Test");
         TestScenario.CreateMutants(1);
@@ -326,7 +326,7 @@ public class MutationTestProcessTests : TestBase
         var target = new MutationTestProcess(executor, coverageAnalyzer, mutationProcessMock, TestLoggerFactory.CreateLogger<MutationTestProcess>());
         // test mutants
         target.Initialize(Input, options, null);
-        target.GetCoverage();
+        await target.GetCoverageAsync();
 
         // first mutant should be marked as survived without any test
         TestScenario.GetMutantStatus(1).ShouldBe(MutantStatus.Survived);
@@ -372,7 +372,7 @@ public class MutationTestProcessTests : TestBase
 
         // test mutants
         target.Initialize(Input, options, null);
-        target.GetCoverage();
+        await target.GetCoverageAsync();
 
         await target.TestAsync(Input.SourceProjectInfo.ProjectContents.Mutants);
         // first mutant should be killed by test 2

@@ -58,14 +58,14 @@ public class StrykerRunner : IStrykerRunner
         try
         {
             // Mutate
-            _mutationTestProcesses = (await _projectOrchestrator.MutateProjectsAsync(options, reporters)).ToList();
+            _mutationTestProcesses = (await _projectOrchestrator.MutateProjectsAsync(options, reporters).ConfigureAwait(false)).ToList();
 
             var rootComponent = AddRootFolderIfMultiProject(_mutationTestProcesses.Select(x => x.Input.SourceProjectInfo.ProjectContents).ToList(), options);
             var combinedTestProjectsInfo = _mutationTestProcesses.Select(mtp => mtp.Input.TestProjectsInfo).Aggregate((a, b) => (TestProjectsInfo)a + (TestProjectsInfo)b);
 
             _logger.LogInformation("{MutantsCount} mutants created", rootComponent.Mutants.Count());
 
-            AnalyzeCoverage(options);
+            await AnalyzeCoverageAsync(options).ConfigureAwait(false);
 
             // Filter
             foreach (var project in _mutationTestProcesses)
@@ -141,7 +141,7 @@ public class StrykerRunner : IStrykerRunner
         }
     }
 
-    private void AnalyzeCoverage(IStrykerOptions options)
+    private async Task AnalyzeCoverageAsync(IStrykerOptions options)
     {
         if (options.OptimizationMode.HasFlag(OptimizationModes.SkipUncoveredMutants) || options.OptimizationMode.HasFlag(OptimizationModes.CoverageBasedTest))
         {
@@ -149,7 +149,7 @@ public class StrykerRunner : IStrykerRunner
 
             foreach (var project in _mutationTestProcesses)
             {
-                project.GetCoverage();
+                await project.GetCoverageAsync().ConfigureAwait(false);
             }
         }
     }

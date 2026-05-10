@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Stryker.Abstractions;
 using Stryker.Abstractions.Options;
@@ -18,7 +19,7 @@ public class CoverageAnalyser : ICoverageAnalyser
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public void DetermineTestCoverage(IStrykerOptions options, IProjectAndTests project, ITestRunner runner, IEnumerable<IMutant> mutants,
+    public async Task DetermineTestCoverageAsync(IStrykerOptions options, IProjectAndTests project, ITestRunner runner, IEnumerable<IMutant> mutants,
         ITestIdentifiers resultFailingTests)
     {
         if (!options.OptimizationMode.HasFlag(OptimizationModes.SkipUncoveredMutants) &&
@@ -29,7 +30,13 @@ public class CoverageAnalyser : ICoverageAnalyser
             return;
         }
 
-        ParseCoverage(runner.CaptureCoverage(project), mutants, new TestIdentifierList(resultFailingTests.GetIdentifiers()));
+        IEnumerable<ICoverageRunResult> coverage;
+        if (runner is IAsyncCoverageCapture asyncCapture)
+            coverage = await asyncCapture.CaptureCoverageAsync(project).ConfigureAwait(false);
+        else
+            coverage = runner.CaptureCoverage(project);
+
+        ParseCoverage(coverage, mutants, new TestIdentifierList(resultFailingTests.GetIdentifiers()));
     }
 
     private static void AssumeAllTestsAreNeeded(IEnumerable<IMutant> mutants)
