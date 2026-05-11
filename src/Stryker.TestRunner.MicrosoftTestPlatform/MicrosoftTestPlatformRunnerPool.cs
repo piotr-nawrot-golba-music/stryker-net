@@ -118,10 +118,10 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner, IAsyncCoverag
     {
         if (_options.OptimizationMode.HasFlag(OptimizationModes.CoverageBasedTest))
         {
-            var confidence = _options.OptimizationMode.HasFlag(OptimizationModes.CaptureCoveragePerTest)
-                ? CoverageConfidence.Exact
-                : CoverageConfidence.Normal;
-            return await CaptureCoverageTestByTestAsync(project, confidence).ConfigureAwait(false);
+            // MTP always restarts the test host between tests (to trigger ProcessExit coverage flush),
+            // so per-test coverage is always captured in isolation — use Exact confidence regardless
+            // of whether perTest or perTestInIsolation was requested.
+            return await CaptureCoverageTestByTestAsync(project, CoverageConfidence.Exact).ConfigureAwait(false);
         }
 
         return await CaptureCoverageInOneGoAsync(project).ConfigureAwait(false);

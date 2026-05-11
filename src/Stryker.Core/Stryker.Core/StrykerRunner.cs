@@ -65,8 +65,7 @@ public class StrykerRunner : IStrykerRunner
 
             _logger.LogInformation("{MutantsCount} mutants created", rootComponent.Mutants.Count());
 
-            await AnalyzeCoverageAsync(options).ConfigureAwait(false);
-
+            AnalyzeCoverage(options);
             // Filter
             foreach (var project in _mutationTestProcesses)
             {
@@ -141,7 +140,7 @@ public class StrykerRunner : IStrykerRunner
         }
     }
 
-    private async Task AnalyzeCoverageAsync(IStrykerOptions options)
+    private void AnalyzeCoverage(IStrykerOptions options)
     {
         if (options.OptimizationMode.HasFlag(OptimizationModes.SkipUncoveredMutants) || options.OptimizationMode.HasFlag(OptimizationModes.CoverageBasedTest))
         {
@@ -149,7 +148,7 @@ public class StrykerRunner : IStrykerRunner
 
             foreach (var project in _mutationTestProcesses)
             {
-                await project.GetCoverageAsync().ConfigureAwait(false);
+                project.GetCoverage();
             }
         }
     }

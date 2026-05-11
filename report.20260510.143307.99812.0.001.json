@@ -1,0 +1,716 @@
+
+{
+  "header": {
+    "reportVersion": 5,
+    "event": "Allocation failed - JavaScript heap out of memory",
+    "trigger": "OOMError",
+    "filename": "report.20260510.143307.99812.0.001.json",
+    "dumpEventTime": "2026-05-10T14:33:07Z",
+    "dumpEventTimeStamp": "1778416387001",
+    "processId": 99812,
+    "threadId": null,
+    "cwd": "C:\\src\\golba-music\\striker\\stryker-net-fixes",
+    "commandLine": [
+      "C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe\\copilot.exe",
+      "--no-warnings",
+      "--report-on-fatalerror",
+      "--optimize-for-size",
+      "--expose-gc",
+      "--no-maglev",
+      "--no-sparkplug",
+      "C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe\\copilot.exe",
+      "--resume=PERF UPGRADE"
+    ],
+    "nodejsVersion": "v24.15.0",
+    "wordSize": 64,
+    "arch": "x64",
+    "platform": "win32",
+    "componentVersions": {
+      "acorn": "8.16.0",
+      "ada": "3.4.4",
+      "amaro": "1.1.8",
+      "ares": "1.34.6",
+      "brotli": "1.2.0",
+      "cldr": "48.0",
+      "icu": "78.2",
+      "llhttp": "9.3.1",
+      "merve": "1.2.2",
+      "modules": "137",
+      "napi": "10",
+      "nbytes": "0.1.3",
+      "ncrypto": "0.0.1",
+      "nghttp2": "1.68.0",
+      "node": "24.15.0",
+      "openssl": "3.5.5",
+      "simdjson": "4.5.0",
+      "simdutf": "6.4.0",
+      "sqlite": "3.51.3",
+      "tz": "2026a",
+      "undici": "7.24.4",
+      "unicode": "17.0",
+      "uv": "1.51.0",
+      "uvwasi": "0.0.23",
+      "v8": "13.6.233.17-node.48",
+      "zlib": "1.3.1-e00f703",
+      "zstd": "1.5.7"
+    },
+    "release": {
+      "name": "node",
+      "lts": "Krypton",
+      "headersUrl": "https://nodejs.org/download/release/v24.15.0/node-v24.15.0-headers.tar.gz",
+      "sourceUrl": "https://nodejs.org/download/release/v24.15.0/node-v24.15.0.tar.gz",
+      "libUrl": "https://nodejs.org/download/release/v24.15.0/win-x64/node.lib"
+    },
+    "osName": "Windows_NT",
+    "osRelease": "10.0.26200",
+    "osVersion": "Windows 11 Pro",
+    "osMachine": "x86_64",
+    "cpus": [
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 17858296,
+        "nice": 0,
+        "sys": 21421875,
+        "idle": 217925000,
+        "irq": 923265
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 15195109,
+        "nice": 0,
+        "sys": 16306500,
+        "idle": 225703437,
+        "irq": 1393687
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 3733921,
+        "nice": 0,
+        "sys": 4165593,
+        "idle": 249305531,
+        "irq": 319000
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 3004093,
+        "nice": 0,
+        "sys": 3204421,
+        "idle": 250996531,
+        "irq": 309593
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 9192703,
+        "nice": 0,
+        "sys": 9760156,
+        "idle": 238252187,
+        "irq": 458593
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 6820812,
+        "nice": 0,
+        "sys": 6401437,
+        "idle": 243982796,
+        "irq": 412234
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 6411984,
+        "nice": 0,
+        "sys": 6790781,
+        "idle": 244002281,
+        "irq": 384171
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 4944031,
+        "nice": 0,
+        "sys": 4544406,
+        "idle": 247716609,
+        "irq": 355781
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 4485906,
+        "nice": 0,
+        "sys": 4809234,
+        "idle": 247909906,
+        "irq": 334390
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 3557140,
+        "nice": 0,
+        "sys": 3475500,
+        "idle": 250172406,
+        "irq": 313359
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 23803203,
+        "nice": 0,
+        "sys": 26492468,
+        "idle": 206909375,
+        "irq": 547015
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 15328265,
+        "nice": 0,
+        "sys": 12603296,
+        "idle": 229273484,
+        "irq": 516000
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 2039234,
+        "nice": 0,
+        "sys": 2594062,
+        "idle": 252571750,
+        "irq": 276328
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 1750453,
+        "nice": 0,
+        "sys": 2235250,
+        "idle": 253219343,
+        "irq": 273421
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 1994546,
+        "nice": 0,
+        "sys": 1739859,
+        "idle": 253470640,
+        "irq": 257109
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 1584687,
+        "nice": 0,
+        "sys": 1564906,
+        "idle": 254055453,
+        "irq": 254453
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 2461343,
+        "nice": 0,
+        "sys": 2818765,
+        "idle": 251924937,
+        "irq": 298625
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 2059265,
+        "nice": 0,
+        "sys": 2272562,
+        "idle": 252873218,
+        "irq": 289859
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 8177562,
+        "nice": 0,
+        "sys": 8766109,
+        "idle": 240261375,
+        "irq": 386062
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 8341890,
+        "nice": 0,
+        "sys": 9072921,
+        "idle": 239790234,
+        "irq": 390375
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 1792312,
+        "nice": 0,
+        "sys": 1918234,
+        "idle": 253494500,
+        "irq": 265156
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 1640625,
+        "nice": 0,
+        "sys": 1670265,
+        "idle": 253894156,
+        "irq": 256359
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 1454812,
+        "nice": 0,
+        "sys": 1436734,
+        "idle": 254313500,
+        "irq": 244078
+      },
+      {
+        "model": "AMD Ryzen 9 5900X 12-Core Processor            ",
+        "speed": 4500,
+        "user": 1425359,
+        "nice": 0,
+        "sys": 1366625,
+        "idle": 254413062,
+        "irq": 237546
+      }
+    ],
+    "networkInterfaces": [
+      {
+        "name": "VPN - VPN Client",
+        "internal": false,
+        "mac": "5e:80:14:b7:e9:dd",
+        "address": "fe80::4818:84eb:d1a4:f829",
+        "netmask": "ffff:ffff:ffff:ffff::",
+        "family": "IPv6",
+        "scopeid": 6
+      },
+      {
+        "name": "VPN - VPN Client",
+        "internal": false,
+        "mac": "5e:80:14:b7:e9:dd",
+        "address": "10.5.5.102",
+        "netmask": "255.255.255.0",
+        "family": "IPv4"
+      },
+      {
+        "name": "vEthernet (Default Switch)",
+        "internal": false,
+        "mac": "00:15:5d:4d:25:e4",
+        "address": "fe80::fe2e:fcf:299b:a473",
+        "netmask": "ffff:ffff:ffff:ffff::",
+        "family": "IPv6",
+        "scopeid": 13
+      },
+      {
+        "name": "vEthernet (Default Switch)",
+        "internal": false,
+        "mac": "00:15:5d:4d:25:e4",
+        "address": "172.29.176.1",
+        "netmask": "255.255.240.0",
+        "family": "IPv4"
+      },
+      {
+        "name": "vEthernet (WSL (Hyper-V firewall))",
+        "internal": false,
+        "mac": "00:15:5d:db:bf:da",
+        "address": "fe80::a3aa:48dd:f2b1:8671",
+        "netmask": "ffff:ffff:ffff:ffff::",
+        "family": "IPv6",
+        "scopeid": 50
+      },
+      {
+        "name": "vEthernet (WSL (Hyper-V firewall))",
+        "internal": false,
+        "mac": "00:15:5d:db:bf:da",
+        "address": "172.21.48.1",
+        "netmask": "255.255.240.0",
+        "family": "IPv4"
+      },
+      {
+        "name": "Wi-Fi",
+        "internal": false,
+        "mac": "84:1b:77:e3:76:f5",
+        "address": "fe80::43a2:146d:7685:de97",
+        "netmask": "ffff:ffff:ffff:ffff::",
+        "family": "IPv6",
+        "scopeid": 22
+      },
+      {
+        "name": "Wi-Fi",
+        "internal": false,
+        "mac": "84:1b:77:e3:76:f5",
+        "address": "192.168.1.14",
+        "netmask": "255.255.255.0",
+        "family": "IPv4"
+      },
+      {
+        "name": "Loopback Pseudo-Interface 1",
+        "internal": true,
+        "mac": "00:00:00:00:00:00",
+        "address": "::1",
+        "netmask": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        "family": "IPv6",
+        "scopeid": 0
+      },
+      {
+        "name": "Loopback Pseudo-Interface 1",
+        "internal": true,
+        "mac": "00:00:00:00:00:00",
+        "address": "127.0.0.1",
+        "netmask": "255.0.0.0",
+        "family": "IPv4"
+      }
+    ],
+    "host": "DarkTower"
+  },
+  "javascriptStack": {
+    "message": "No stack.",
+    "stack": [
+      "Unavailable."
+    ],
+    "errorProperties": {
+    }
+  },
+  "javascriptHeap": {
+    "totalMemory": 197095424,
+    "executableMemory": 3674112,
+    "totalCommittedMemory": 197095424,
+    "availableMemory": 4123042344,
+    "totalGlobalHandlesMemory": 192584,
+    "usedGlobalHandlesMemory": 29376,
+    "usedMemory": 175738040,
+    "memoryLimit": 4298113024,
+    "mallocedMemory": 2129968,
+    "externalMemory": 50697426,
+    "peakMallocedMemory": 13431136,
+    "nativeContextCount": 3,
+    "detachedContextCount": 0,
+    "doesZapGarbage": 0,
+    "heapSpaces": {
+      "read_only_space": {
+        "memorySize": 0,
+        "committedMemory": 0,
+        "capacity": 0,
+        "used": 0,
+        "available": 0
+      },
+      "new_space": {
+        "memorySize": 1048576,
+        "committedMemory": 1048576,
+        "capacity": 1048512,
+        "used": 1048512,
+        "available": 0
+      },
+      "old_space": {
+        "memorySize": 166043648,
+        "committedMemory": 166043648,
+        "capacity": 165731792,
+        "used": 145963712,
+        "available": 19768080
+      },
+      "code_space": {
+        "memorySize": 2883584,
+        "committedMemory": 2883584,
+        "capacity": 2883232,
+        "used": 2474496,
+        "available": 408736
+      },
+      "shared_space": {
+        "memorySize": 0,
+        "committedMemory": 0,
+        "capacity": 0,
+        "used": 0,
+        "available": 0
+      },
+      "trusted_space": {
+        "memorySize": 5328896,
+        "committedMemory": 5328896,
+        "capacity": 5312616,
+        "used": 4513264,
+        "available": 799352
+      },
+      "shared_trusted_space": {
+        "memorySize": 0,
+        "committedMemory": 0,
+        "capacity": 0,
+        "used": 0,
+        "available": 0
+      },
+      "new_large_object_space": {
+        "memorySize": 0,
+        "committedMemory": 0,
+        "capacity": 1048576,
+        "used": 0,
+        "available": 1048576
+      },
+      "large_object_space": {
+        "memorySize": 20766720,
+        "committedMemory": 20766720,
+        "capacity": 20718736,
+        "used": 20718736,
+        "available": 0
+      },
+      "code_large_object_space": {
+        "memorySize": 790528,
+        "committedMemory": 790528,
+        "capacity": 787264,
+        "used": 787264,
+        "available": 0
+      },
+      "shared_large_object_space": {
+        "memorySize": 0,
+        "committedMemory": 0,
+        "capacity": 0,
+        "used": 0,
+        "available": 0
+      },
+      "shared_trusted_large_object_space": {
+        "memorySize": 0,
+        "committedMemory": 0,
+        "capacity": 0,
+        "used": 0,
+        "available": 0
+      },
+      "trusted_large_object_space": {
+        "memorySize": 233472,
+        "committedMemory": 233472,
+        "capacity": 232056,
+        "used": 232056,
+        "available": 0
+      }
+    }
+  },
+  "nativeStack": [
+    {
+      "pc": "0x00007ff6a314a9f7",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3147c6c",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a314c998",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3213f77",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3e5faa7",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3c604d7",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3bf8efb",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3bd094e",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3c62f72",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3c61f27",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3c72e52",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3c7297b",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a50fa2ad",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3c5dfa0",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3c787ea",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a3c84c86",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00007ff6a38569c7",
+      "symbol": ""
+    },
+    {
+      "pc": "0x00000275fb9b75fa",
+      "symbol": ""
+    }
+  ],
+  "resourceUsage": {
+    "free_memory": 2279526400,
+    "total_memory": 34281119744,
+    "rss": 314892288,
+    "available_memory": 2279526400,
+    "userCpuSeconds": 73.375,
+    "kernelCpuSeconds": 4.984,
+    "cpuConsumptionPercent": 59.3629,
+    "userCpuConsumptionPercent": 55.5871,
+    "kernelCpuConsumptionPercent": 3.77576,
+    "maxRss": 330334208,
+    "pageFaults": {
+      "IORequired": 622873,
+      "IONotRequired": 0
+    },
+    "fsActivity": {
+      "reads": 1601,
+      "writes": 108
+    }
+  },
+  "uvthreadResourceUsage": {
+    "userCpuSeconds": 34.265,
+    "kernelCpuSeconds": 3.218,
+    "cpuConsumptionPercent": 28.3962,
+    "userCpuConsumptionPercent": 25.9583,
+    "kernelCpuConsumptionPercent": 2.43788,
+    "fsActivity": {
+      "reads": 0,
+      "writes": 0
+    }
+  },
+  "libuv": [
+  ],
+  "workers": [
+  ],
+  "environmentVariables": {
+    "=C:": "C:\\src\\golba-music\\striker\\stryker-net-fixes",
+    "ALLUSERSPROFILE": "C:\\ProgramData",
+    "APPDATA": "C:\\Users\\PNGM\\AppData\\Roaming",
+    "ARM_CLIENT_ID": "5b5b9744-0256-4768-9e68-6fdb3a8dbd94",
+    "ARM_SUBSCRIPTION_ID": "d65f7c2a-18b6-40a0-a466-c54f1a293c36",
+    "ARM_TENANT_ID": "6982bdd8-ae81-4d28-a72c-33c75f7eccd8",
+    "ChocolateyInstall": "C:\\ProgramData\\chocolatey",
+    "CLAUDE_CODE_GIT_BASH_PATH": "C:\\Program Files\\Git\\bin\\bash.exe",
+    "COMMANDER_PATH": "C:\\Program Files (x86)\\totalcmd",
+    "CommonProgramFiles": "C:\\Program Files\\Common Files",
+    "CommonProgramFiles(x86)": "C:\\Program Files (x86)\\Common Files",
+    "CommonProgramW6432": "C:\\Program Files\\Common Files",
+    "COMPUTERNAME": "DARKTOWER",
+    "ComSpec": "C:\\WINDOWS\\system32\\cmd.exe",
+    "COPILOT_CLI_BINARY_VERSION": "1.0.42",
+    "COPILOT_LOADER_PID": "108976",
+    "COPILOT_RUN_APP": "1",
+    "DriverData": "C:\\Windows\\System32\\Drivers\\DriverData",
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "safe.bareRepository",
+    "GIT_CONFIG_VALUE_0": "explicit",
+    "HOMEDRIVE": "C:",
+    "HOMEPATH": "\\Users\\PNGM",
+    "LOCALAPPDATA": "C:\\Users\\PNGM\\AppData\\Local",
+    "LOGONSERVER": "\\\\DARKTOWER",
+    "NODE_ENV": "production",
+    "NUMBER_OF_PROCESSORS": "24",
+    "NVM_HOME": "C:\\ProgramData\\nvm",
+    "NVM_SYMLINK": "C:\\nvm4w\\nodejs",
+    "OneDrive": "C:\\Users\\PNGM\\OneDrive - Golba Music",
+    "OneDriveCommercial": "C:\\Users\\PNGM\\OneDrive - Golba Music",
+    "OS": "Windows_NT",
+    "Path": "C:\\Program Files\\PowerShell\\7;C:\\Program Files\\SqlCmd\\;C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI;C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\wbin;C:\\Python314\\Scripts\\;C:\\Python314\\;c:\\Users\\PNGM\\AppData\\Local\\Programs\\cursor\\resources\\app\\bin;C:\\Python312\\Scripts\\;C:\\Python312\\;C:\\Python311\\Scripts\\;C:\\Python311\\;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\ProgramData\\chocolatey\\bin;C:\\Program Files\\dotnet\\;C:\\ProgramData\\nvm;C:\\Program Files (x86)\\Gpg4win\\..\\GnuPG\\bin;C:\\WINDOWS\\system32;C:\\WINDOWS;C:\\WINDOWS\\System32\\Wbem;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\;C:\\WINDOWS\\System32\\OpenSSH\\;C:\\ProgramData\\nvm;C:\\Program Files (x86)\\Microsoft SQL Server\\160\\DTS\\Binn\\;C:\\Program Files\\;c:\\Users\\PNGM\\AppData\\Local\\Programs\\cursor\\resources\\app\\bin;C:\\Program Files\\PostgreSQL\\15\\bin;C:\\ProgramData\\nvm;C:\\nvm4w\\nodejs;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin;C:\\Program Files\\PuTTY\\;C:\\Program Files\\GnuPG\\bin;C:\\Program Files (x86)\\cloudflared\\;C:\\Program Files (x86)\\dotnet-core-uninstall\\;C:\\Program Files\\GitHub CLI\\;C:\\Program Files\\PowerToys\\DSCModules\\;C:\\Program Files\\RedHat\\Podman\\;C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\;C:\\Program Files\\Git\\cmd;C:\\Program Files\\Microsoft\\Azure Functions Core Tools\\;C:\\Program Files\\PowerShell\\7\\;C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\;C:\\Users\\PNGM\\AppData\\Local\\Programs\\Python\\Python314\\Scripts\\;C:\\Users\\PNGM\\AppData\\Local\\Programs\\Python\\Python314\\;C:\\Users\\PNGM\\.cargo\\bin;C:\\Program Files\\PowerShell\\7;C:\\Python314\\Scripts\\;C:\\Python314\\;C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path;C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath;C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\wbin;C:\\Python312\\Scripts\\;C:\\Python312\\;C:\\Python311\\Scripts\\;C:\\Python311\\;C:\\Python310\\Scripts\\;C:\\Python310\\;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\ProgramData\\chocolatey\\bin;C:\\Program Files\\dotnet\\;C:\\ProgramData\\nvm;C:\\Program Files\\Microsoft\\Azure Functions Core Tools\\;C:\\Program Files (x86)\\gnupg\\bin;C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\;C:\\Program Files\\Azure Data Studio\\bin;C:\\Program Files (x86)\\Gpg4win\\..\\GnuPG\\bin;C:\\Program Files (x86)\\Microsoft SQL Server\\160\\DTS\\Binn\\;C:\\Program Files\\;C:\\Program Files\\Microsoft VS Code\\bin;C:\\Program Files (x86)\\dotnet-core-uninstall\\;C:\\Program Files\\Git\\cmd;C:\\Program Files\\PostgreSQL\\15\\bin;C:\\nvm4w\\nodejs;C:\\Program Files\\GitHub CLI\\;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin;C:\\Program Files\\RedHat\\Podman\\;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\PNGM\\AppData\\Local\\JetBrains\\Toolbox\\scripts;C:\\Users\\PNGM\\.dotnet\\tools;C:\\Users\\PNGM\\AppData\\Local\\GitHubDesktop\\bin;C:\\Users\\PNGM\\AppData\\Local\\Programs\\gnupg\\bin;C:\\Users\\PNGM\\AppData\\Local\\Programs\\Gpg4win\\..\\GnuPG\\bin;C:\\Users\\PNGM\\AppData\\Local\\Programs\\OpenTofu;C:\\Users\\PNGM\\.local\\bin;C:\\Users\\PNGM\\AppData\\Local\\Programs\\Zed\\bin;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\Users\\PNGM\\AppData\\Roaming\\Python\\Python314\\Scripts;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\SST.opencode_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\junegunn.fzf_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\sharkdp.bat_Microsoft.Winget.Source_8wekyb3d8bbwe\\bat-v0.26.1-x86_64-pc-windows-msvc;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\BurntSushi.ripgrep.MSVC_Microsoft.Winget.Source_8wekyb3d8bbwe\\ripgrep-15.1.0-x86_64-pc-windows-msvc;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\JesseDuffield.lazygit_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\ajeetdsouza.zoxide_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\tools\\btop\\btop4win;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\AlDanial.Cloc_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\Users\\PNGM\\AppData\\Roaming\\npm;C:\\Users\\PNGM\\AppData\\Local\\Programs\\cursor\\resources\\app\\bin;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\chmln.sd_Microsoft.Winget.Source_8wekyb3d8bbwe\\sd-v1.1.0-x86_64-pc-windows-msvc;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\ducaale.xh_Microsoft.Winget.Source_8wekyb3d8bbwe\\xh-v0.25.3-x86_64-pc-windows-msvc;C:\\Users\\PNGM\\AppData\\Local\\Pandoc\\;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Oven-sh.Bun_Microsoft.Winget.Source_8wekyb3d8bbwe\\.\\bun-windows-x64;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\charmbracelet.glow_Microsoft.Winget.Source_8wekyb3d8bbwe\\glow_2.1.2_Windows_x86_64;C:\\Users\\PNGM\\AppData\\Local\\Programs\\MiKTeX\\miktex\\bin\\x64\\;C:\\Users\\PNGM\\.bun\\bin;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\sxyazi.yazi_Microsoft.Winget.Source_8wekyb3d8bbwe\\yazi-x86_64-pc-windows-msvc;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1-full_build\\bin;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\jqlang.jq_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\oschwartz10612.Poppler_Microsoft.Winget.Source_8wekyb3d8bbwe\\poppler-25.07.0\\Library\\bin;C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\sharkdp.fd_Microsoft.Winget.Source_8wekyb3d8bbwe\\fd-v10.4.2-x86_64-pc-windows-msvc;",
+    "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL",
+    "POWERSHELL_DISTRIBUTION_CHANNEL": "MSI:Windows 10 Pro",
+    "PROCESSOR_ARCHITECTURE": "AMD64",
+    "PROCESSOR_IDENTIFIER": "AMD64 Family 25 Model 33 Stepping 0, AuthenticAMD",
+    "PROCESSOR_LEVEL": "25",
+    "PROCESSOR_REVISION": "2100",
+    "ProgramData": "C:\\ProgramData",
+    "ProgramFiles": "C:\\Program Files",
+    "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    "ProgramW6432": "C:\\Program Files",
+    "PSModulePath": "C:\\Users\\PNGM\\OneDrive - Golba Music\\Documents\\PowerShell\\Modules;C:\\Program Files\\PowerShell\\Modules;c:\\program files\\powershell\\7\\Modules;C:\\Program Files\\WindowsPowerShell\\Modules;C:\\WINDOWS\\system32\\WindowsPowerShell\\v1.0\\Modules",
+    "PUBLIC": "C:\\Users\\Public",
+    "SESSIONNAME": "Console",
+    "soffice": "C:\\Program Files\\LibreOffice\\program",
+    "SystemDrive": "C:",
+    "SystemRoot": "C:\\WINDOWS",
+    "TEMP": "C:\\Users\\PNGM\\AppData\\Local\\Temp",
+    "TMP": "C:\\Users\\PNGM\\AppData\\Local\\Temp",
+    "USERDOMAIN": "DarkTower",
+    "USERDOMAIN_ROAMINGPROFILE": "DarkTower",
+    "USERNAME": "PNGM",
+    "USERPROFILE": "C:\\Users\\PNGM",
+    "windir": "C:\\WINDOWS",
+    "WSLENV": "WT_SESSION:WT_PROFILE_ID:",
+    "WT_PROFILE_ID": "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
+    "WT_SESSION": "b41bc362-05e3-4309-9aaa-8c5d65089eaa"
+  },
+  "sharedObjects": [
+    "C:\\Users\\PNGM\\AppData\\Local\\Microsoft\\WinGet\\Packages\\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe\\copilot.exe",
+    "C:\\WINDOWS\\SYSTEM32\\ntdll.dll",
+    "C:\\WINDOWS\\System32\\KERNEL32.DLL",
+    "C:\\WINDOWS\\System32\\KERNELBASE.dll",
+    "C:\\WINDOWS\\System32\\CRYPT32.dll",
+    "C:\\WINDOWS\\System32\\ucrtbase.dll",
+    "C:\\WINDOWS\\System32\\WS2_32.dll",
+    "C:\\WINDOWS\\System32\\RPCRT4.dll",
+    "C:\\WINDOWS\\System32\\USER32.dll",
+    "C:\\WINDOWS\\System32\\win32u.dll",
+    "C:\\WINDOWS\\System32\\GDI32.dll",
+    "C:\\WINDOWS\\System32\\gdi32full.dll",
+    "C:\\WINDOWS\\System32\\msvcp_win.dll",
+    "C:\\WINDOWS\\System32\\ADVAPI32.dll",
+    "C:\\WINDOWS\\System32\\msvcrt.dll",
+    "C:\\WINDOWS\\System32\\sechost.dll",
+    "C:\\WINDOWS\\System32\\SHELL32.dll",
+    "C:\\WINDOWS\\SYSTEM32\\dbghelp.dll",
+    "C:\\WINDOWS\\System32\\wintypes.dll",
+    "C:\\WINDOWS\\System32\\combase.dll",
+    "C:\\WINDOWS\\SYSTEM32\\IPHLPAPI.DLL",
+    "C:\\WINDOWS\\System32\\ole32.dll",
+    "C:\\WINDOWS\\System32\\OLEAUT32.dll",
+    "C:\\WINDOWS\\SYSTEM32\\USERENV.dll",
+    "C:\\WINDOWS\\SYSTEM32\\WINMM.dll",
+    "C:\\WINDOWS\\SYSTEM32\\dbgcore.DLL",
+    "C:\\WINDOWS\\SYSTEM32\\CRYPTBASE.DLL",
+    "C:\\WINDOWS\\System32\\IMM32.DLL",
+    "C:\\WINDOWS\\SYSTEM32\\powrprof.dll",
+    "C:\\WINDOWS\\SYSTEM32\\UMPDC.dll",
+    "C:\\WINDOWS\\system32\\uxtheme.dll",
+    "C:\\WINDOWS\\system32\\mswsock.dll",
+    "C:\\WINDOWS\\SYSTEM32\\CRYPTSP.dll",
+    "C:\\WINDOWS\\system32\\rsaenh.dll",
+    "C:\\WINDOWS\\System32\\bcryptPrimitives.dll",
+    "C:\\WINDOWS\\SYSTEM32\\kernel.appcore.dll",
+    "\\\\?\\C:\\Users\\PNGM\\.copilot\\pkg\\universal\\1.0.44\\koffi\\build\\koffi\\win32_x64\\koffi.node",
+    "C:\\Users\\PNGM\\.copilot\\pkg\\universal\\1.0.44\\prebuilds\\win32-x64\\win32_native.dll",
+    "C:\\WINDOWS\\SYSTEM32\\VCRUNTIME140.dll",
+    "C:\\WINDOWS\\System32\\NSI.dll",
+    "C:\\WINDOWS\\SYSTEM32\\dhcpcsvc6.DLL",
+    "C:\\WINDOWS\\SYSTEM32\\dhcpcsvc.DLL",
+    "C:\\WINDOWS\\SYSTEM32\\DNSAPI.dll",
+    "C:\\WINDOWS\\SYSTEM32\\MSASN1.dll",
+    "\\\\?\\C:\\Users\\PNGM\\.copilot\\pkg\\universal\\1.0.44\\prebuilds\\win32-x64\\keytar.node",
+    "C:\\Windows\\System32\\rasadhlp.dll",
+    "C:\\WINDOWS\\System32\\fwpuclnt.dll",
+    "C:\\WINDOWS\\SYSTEM32\\ntmarta.dll",
+    "C:\\WINDOWS\\system32\\napinsp.dll",
+    "C:\\WINDOWS\\System32\\winrnr.dll",
+    "C:\\WINDOWS\\system32\\nlansp_c.dll",
+    "C:\\WINDOWS\\system32\\wshbth.dll"
+  ]
+}

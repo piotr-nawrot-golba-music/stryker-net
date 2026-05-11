@@ -344,7 +344,7 @@ public class VsTestRunnerPoolTests : VsTestMockingHelper
 
         var tester = BuildMutationTestProcess(runner, options, sourceProject: project);
         SetupMockCoverageRun(mockVsTest, new Dictionary<string, string> { ["T0"] = "0;", ["T1"] = "1;" });
-        tester.GetCoverageAsync();
+        tester.GetCoverage();
         SetupMockPartialTestRun(mockVsTest, new Dictionary<string, string> { ["0,1"] = "T0=S,T1=F" });
         _ = await tester.TestAsync(project.ProjectContents.Mutants.Where(x => !x.CoveringTests.IsEmpty));
 

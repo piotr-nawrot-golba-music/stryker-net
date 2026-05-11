@@ -23,7 +23,7 @@ public interface IMutationTestProcess
     void Mutate();
     Task<StrykerRunResult> TestAsync(IEnumerable<IMutant> mutantsToTest);
     void Restore();
-    Task GetCoverageAsync();
+    void GetCoverage();
     void FilterMutants();
 }
 
@@ -237,6 +237,6 @@ public class MutationTestProcess : IMutationTestProcess
         return blocks;
     }
 
-    public Task GetCoverageAsync() => _coverageAnalyser.DetermineTestCoverageAsync(_options, Input.SourceProjectInfo,
+    public void GetCoverage() => _coverageAnalyser.DetermineTestCoverage(_options, Input.SourceProjectInfo,
         _mutationTestExecutor.TestRunner, _projectContents.Mutants, Input.InitialTestRun.Result.FailingTests);
 }

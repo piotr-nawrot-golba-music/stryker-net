@@ -23,7 +23,7 @@ public class CoverageAnalyser : ICoverageAnalyser
         ITestIdentifiers resultFailingTests) =>
         DetermineTestCoverageAsync(options, project, runner, mutants, resultFailingTests).GetAwaiter().GetResult();
 
-    public async Task DetermineTestCoverageAsync(IStrykerOptions options, IProjectAndTests project, ITestRunner runner, IEnumerable<IMutant> mutants,
+    private async Task DetermineTestCoverageAsync(IStrykerOptions options, IProjectAndTests project, ITestRunner runner, IEnumerable<IMutant> mutants,
         ITestIdentifiers resultFailingTests)
     {
         if (!options.OptimizationMode.HasFlag(OptimizationModes.SkipUncoveredMutants) &&
