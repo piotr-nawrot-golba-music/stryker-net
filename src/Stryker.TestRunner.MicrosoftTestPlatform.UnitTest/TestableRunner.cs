@@ -35,6 +35,20 @@ internal class TestableRunner : SingleMicrosoftTestPlatformRunner
         _coverageHandler = coverageHandler;
     }
 
+    internal override async Task<IReadOnlyList<ICoverageRunResult>> RunTestsForLiveCoverageAsync(
+        string assembly, IReadOnlyList<(TestNode Test, string TestId)> tests, CoverageConfidence confidence)
+    {
+        // Route the live (per-test) capture through the same per-test handler as the
+        // isolation path, so pool tests can observe both modes with a single seam.
+        var results = new List<ICoverageRunResult>(tests.Count);
+        foreach (var (test, testId) in tests)
+        {
+            results.Add(await RunSingleTestForCoverageAsync(assembly, test, testId, confidence).ConfigureAwait(false));
+        }
+
+        return results;
+    }
+
     internal override async Task<ICoverageRunResult> RunSingleTestForCoverageAsync(
         string assembly, TestNode test, string testId, CoverageConfidence confidence)
     {

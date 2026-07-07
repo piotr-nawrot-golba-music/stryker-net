@@ -104,15 +104,18 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
 
     public IEnumerable<ICoverageRunResult> CaptureCoverage(IProjectAndTests project)
     {
+        if (_options.OptimizationMode.HasFlag(OptimizationModes.CaptureCoveragePerTest))
+        {
+            // perTestInIsolation: each test runs in its own process, so coverage is Exact
+            return CaptureCoverageTestByTest(CoverageConfidence.Exact);
+        }
+
         if (_options.OptimizationMode.HasFlag(OptimizationModes.CoverageBasedTest))
         {
-            // Coverage captured in isolation (perTestInIsolation) is Exact; plain perTest is Normal.
-            // The mode is resolved upfront in option validation (MTP promotes perTest -> isolation),
-            // so this reflects what is actually running. Mirrors VsTestRunnerPool.
-            var confidence = _options.OptimizationMode.HasFlag(OptimizationModes.CaptureCoveragePerTest)
-                ? CoverageConfidence.Exact
-                : CoverageConfidence.Normal;
-            return CaptureCoverageTestByTest(confidence);
+            // perTest: tests run one by one against live servers (epoch-based attribution).
+            // Confidence is Normal since background threads and static initializers can leak
+            // coverage across tests in a shared process. Mirrors VsTestRunnerPool.
+            return CaptureCoveragePerTestLive();
         }
 
         return CaptureCoverageInOneGo(project);
@@ -226,6 +229,82 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
         finally
         {
             foreach (var runner in _availableRunners)
+            {
+                runner.SetCoverageMode(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Captures per-test coverage without restarting the test process per test ('perTest').
+    /// Each assembly's tests are partitioned across the runners; every partition runs its tests
+    /// sequentially on its own live server, with epoch-based coverage attribution.
+    /// </summary>
+    private IEnumerable<ICoverageRunResult> CaptureCoveragePerTestLive()
+    {
+        _logger.LogInformation("Starting per-test coverage capture for MTP runner (process reuse)");
+
+        foreach (var runner in _allRunners)
+        {
+            runner.SetCoverageMode(true, live: true);
+        }
+
+        try
+        {
+            var partitions = new List<(string Assembly, List<(TestNode Test, string TestId)> Tests)>();
+            var totalTests = 0;
+
+            foreach (var (assembly, tests) in _testsByAssembly)
+            {
+                var testsWithIds = new List<(TestNode Test, string TestId)>();
+                foreach (var test in tests)
+                {
+                    if (_testDescriptions.TryGetValue(test.Uid, out var desc))
+                    {
+                        testsWithIds.Add((test, desc.Id));
+                    }
+                }
+
+                if (testsWithIds.Count == 0)
+                {
+                    continue;
+                }
+
+                totalTests += testsWithIds.Count;
+                var partitionSize = Math.Max(1, (int)Math.Ceiling(testsWithIds.Count / (double)_countOfRunners));
+                partitions.AddRange(testsWithIds.Chunk(partitionSize).Select(chunk => (assembly, chunk.ToList())));
+            }
+
+            _logger.LogInformation("Capturing per-test coverage for {TestCount} tests across {AssemblyCount} assemblies",
+                totalTests, _testsByAssembly.Count);
+
+            var results = new ConcurrentBag<ICoverageRunResult>();
+
+            Parallel.ForEach(partitions,
+                new ParallelOptions { MaxDegreeOfParallelism = _countOfRunners },
+                partition =>
+                {
+                    var partitionResults = RunThisAsync(async runner =>
+                        await runner.RunTestsForLiveCoverageAsync(
+                            partition.Assembly, partition.Tests, CoverageConfidence.Normal)
+                            .ConfigureAwait(false))
+                        .GetAwaiter().GetResult();
+
+                    foreach (var result in partitionResults)
+                    {
+                        results.Add(result);
+                    }
+                });
+
+            _logger.LogInformation(
+                "Per-test coverage capture complete: {TestCount} tests captured",
+                results.Count);
+
+            return results;
+        }
+        finally
+        {
+            foreach (var runner in _allRunners)
             {
                 runner.SetCoverageMode(false);
             }

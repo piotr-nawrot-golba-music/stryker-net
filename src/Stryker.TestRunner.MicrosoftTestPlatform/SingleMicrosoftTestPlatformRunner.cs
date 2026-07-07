@@ -33,6 +33,10 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
     private readonly SemaphoreSlim _serverLock = new(1, 1);
     private bool _disposed;
     private bool _coverageMode;
+    // Per-test ('live') coverage: tests run one by one against a live server while an epoch
+    // counter file tells the injected MutantControl where one test's coverage ends and the next begins
+    private bool _liveCoverageMode;
+    private readonly string _epochFilePath;
 
     private readonly string _runnerId;
 
@@ -56,6 +60,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         // Create unique file paths for this runner to communicate with the test process
         _mutantFilePath = Path.Combine(Path.GetTempPath(), $"stryker-mutant-{_id}.txt");
         _coverageFilePath = Path.Combine(Path.GetTempPath(), $"stryker-coverage-{_id}.txt");
+        _epochFilePath = Path.Combine(Path.GetTempPath(), $"stryker-epoch-{_id}.txt");
         _runnerId = $"MtpRunner-{_id}";
 
         // Initialize with no active mutation
@@ -126,7 +131,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
     /// in the test process, causing MutantControl.FlushCoverageToFile() to be called.
     /// The server is removed from the cache so a fresh one is created on next use.
     /// </summary>
-    internal async Task StopAndRemoveServerAsync(string assembly)
+    internal virtual async Task StopAndRemoveServerAsync(string assembly)
     {
         AssemblyTestServer? server;
         await _serverLock.WaitAsync().ConfigureAwait(false);
@@ -207,6 +212,122 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         }
     }
 
+    /// <summary>
+    /// Captures per-test coverage while keeping the test server alive ('perTest' mode).
+    /// Tests run one at a time; before each test the epoch counter file is bumped, which makes the
+    /// injected MutantControl flush the previous test's coverage to '&lt;coverageFile&gt;.&lt;epoch&gt;'.
+    /// Stopping the server at the end flushes the final test's coverage on process exit.
+    /// Unlike perTestInIsolation this avoids a process restart per test, at the cost of
+    /// Normal (instead of Exact) confidence: code running on background threads may be
+    /// attributed to the wrong test, and static initializers only run once per process.
+    /// </summary>
+    internal virtual async Task<IReadOnlyList<ICoverageRunResult>> RunTestsForLiveCoverageAsync(
+        string assembly,
+        IReadOnlyList<(TestNode Test, string TestId)> tests,
+        CoverageConfidence confidence)
+    {
+        var results = new List<ICoverageRunResult>(tests.Count);
+
+        try
+        {
+            var epoch = 0;
+            foreach (var (test, _) in tests)
+            {
+                epoch++;
+                WriteEpochToFile(epoch);
+                await ExecuteSingleTestAsync(assembly, test).ConfigureAwait(false);
+            }
+
+            // stopping the server triggers the final coverage flush on process exit
+            await StopAndRemoveServerAsync(assembly).ConfigureAwait(false);
+
+            for (var e = 1; e <= tests.Count; e++)
+            {
+                var testId = tests[e - 1].TestId;
+                // A missing epoch file is expected: it means the test never executed mutated code
+                var (coveredMutants, staticMutants) = ReadCoverageData(EpochCoverageFilePath(e));
+
+                _logger.LogDebug(
+                    "{RunnerId}: Test {TestId} covers {CoveredCount} mutants ({StaticCount} static)",
+                    _runnerId, testId, coveredMutants.Count, staticMutants.Count);
+
+                results.Add(CoverageRunResult.Create(
+                    testId,
+                    confidence,
+                    coveredMutants,
+                    staticMutants,
+                    Array.Empty<int>()));
+            }
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{RunnerId}: Failed to capture per-test coverage for {Assembly}", _runnerId, assembly);
+            try { await StopAndRemoveServerAsync(assembly).ConfigureAwait(false); }
+            catch { /* best-effort cleanup to prevent server leak */ }
+
+            // coverage is unreliable for the tests of this run; mark them all as Dubious
+            return tests
+                .Select(t => CoverageRunResult.Create(
+                    t.TestId, CoverageConfidence.Dubious, Array.Empty<int>(), Array.Empty<int>(), Array.Empty<int>()))
+                .ToList();
+        }
+        finally
+        {
+            DeleteEpochArtifacts();
+        }
+    }
+
+    /// <summary>
+    /// Runs a single test against the (live) server of the given assembly. Seam for unit tests.
+    /// </summary>
+    internal virtual async Task ExecuteSingleTestAsync(string assembly, TestNode test)
+    {
+        var server = await GetOrCreateServerAsync(assembly).ConfigureAwait(false);
+        await server.RunTestsAsync(new[] { test }).ConfigureAwait(false);
+    }
+
+    private void WriteEpochToFile(int epoch)
+    {
+        try
+        {
+            File.WriteAllText(_epochFilePath, epoch.ToString());
+            // MutantControl detects epoch changes via the file's last-write time; consecutive
+            // writes can fall within the timestamp resolution, so stamp a strictly increasing time
+            File.SetLastWriteTimeUtc(_epochFilePath, DateTime.UnixEpoch.AddSeconds(epoch));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{RunnerId}: Failed to write epoch to file {FilePath}", _runnerId, _epochFilePath);
+        }
+    }
+
+    internal string EpochCoverageFilePath(int epoch) => $"{_coverageFilePath}.{epoch}";
+
+    /// <summary>
+    /// Deletes the epoch counter file and all per-epoch coverage files of this runner.
+    /// </summary>
+    private void DeleteEpochArtifacts()
+    {
+        try
+        {
+            if (File.Exists(_epochFilePath))
+            {
+                File.Delete(_epochFilePath);
+            }
+
+            foreach (var file in Directory.GetFiles(Path.GetTempPath(), $"{Path.GetFileName(_coverageFilePath)}.*"))
+            {
+                File.Delete(file);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{RunnerId}: Failed to delete epoch coverage files", _runnerId);
+        }
+    }
+
     private void WriteMutantIdToFile(int mutantId)
     {
         try
@@ -235,6 +356,11 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         if (_coverageMode)
         {
             envVars["STRYKER_COVERAGE_FILE"] = Path.GetFileName(_coverageFilePath);
+
+            if (_liveCoverageMode)
+            {
+                envVars["STRYKER_COVERAGE_EPOCH_FILE"] = Path.GetFileName(_epochFilePath);
+            }
         }
 
         return envVars;
@@ -244,15 +370,25 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
     /// Enables or disables coverage capture mode. When enabled, the test process will track
     /// which mutations are covered and write the data to a file on process exit.
     /// </summary>
-    public void SetCoverageMode(bool enabled)
+    public void SetCoverageMode(bool enabled) => SetCoverageMode(enabled, live: false);
+
+    /// <summary>
+    /// Enables or disables coverage capture mode. When <paramref name="live"/> is set, per-test
+    /// (epoch-based) coverage is captured: the runner bumps an epoch counter between tests and the
+    /// test process flushes each test's coverage to its own file without being restarted.
+    /// </summary>
+    internal void SetCoverageMode(bool enabled, bool live)
     {
+        var liveMode = enabled && live;
         _serverLock.Wait();
         try
         {
-            if (_coverageMode != enabled)
+            if (_coverageMode != enabled || _liveCoverageMode != liveMode)
             {
                 _coverageMode = enabled;
-                _logger.LogDebug("{RunnerId}: Coverage mode {Status}", _runnerId, enabled ? "enabled" : "disabled");
+                _liveCoverageMode = liveMode;
+                _logger.LogDebug("{RunnerId}: Coverage mode {Status}", _runnerId,
+                    enabled ? (liveMode ? "enabled (per test)" : "enabled") : "disabled");
 
                 foreach (var server in _assemblyServers.Values)
                 {
@@ -266,26 +402,30 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
             _serverLock.Release();
         }
 
-        // Always clean up any existing coverage file to prevent stale data,
+        // Always clean up any existing coverage files to prevent stale data,
         // even when the mode hasn't changed (e.g. retry/re-run paths)
         DeleteCoverageFile();
+        DeleteEpochArtifacts();
     }
 
     /// <summary>
     /// Reads coverage data from the coverage file written by the test process.
     /// Returns the covered mutants and static mutants as separate lists.
     /// </summary>
-    public (IReadOnlyList<int> CoveredMutants, IReadOnlyList<int> StaticMutants) ReadCoverageData()
+    public (IReadOnlyList<int> CoveredMutants, IReadOnlyList<int> StaticMutants) ReadCoverageData() =>
+        ReadCoverageData(_coverageFilePath);
+
+    internal (IReadOnlyList<int> CoveredMutants, IReadOnlyList<int> StaticMutants) ReadCoverageData(string coverageFilePath)
     {
-        if (!File.Exists(_coverageFilePath))
+        if (!File.Exists(coverageFilePath))
         {
-            _logger.LogDebug("{RunnerId}: Coverage file not found at {Path}", _runnerId, _coverageFilePath);
+            _logger.LogDebug("{RunnerId}: Coverage file not found at {Path}", _runnerId, coverageFilePath);
             return (Array.Empty<int>(), Array.Empty<int>());
         }
 
         try
         {
-            var content = File.ReadAllText(_coverageFilePath).Trim();
+            var content = File.ReadAllText(coverageFilePath).Trim();
             _logger.LogDebug("{RunnerId}: Read coverage data: {Content}", _runnerId, content);
 
             if (string.IsNullOrEmpty(content))
@@ -301,7 +441,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "{RunnerId}: Failed to read coverage file at {Path}", _runnerId, _coverageFilePath);
+            _logger.LogWarning(ex, "{RunnerId}: Failed to read coverage file at {Path}", _runnerId, coverageFilePath);
             return (Array.Empty<int>(), Array.Empty<int>());
         }
     }
@@ -884,6 +1024,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
                 // Ignore cleanup errors
                 _logger.LogWarning(ex, "{RunnerId}: Failed to clean up temp files", _runnerId);
             }
+            DeleteEpochArtifacts();
 
             _serverLock.Dispose();
         }

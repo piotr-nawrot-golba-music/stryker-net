@@ -21,6 +21,14 @@ namespace Stryker
         private static bool _coverageFilePathCached;
         private static bool _processExitRegistered;
 
+        // Epoch-based per-test coverage for the MTP runner ('perTest' with process reuse):
+        // the runner bumps an epoch counter in a control file between tests; when a coverage
+        // registration observes a new epoch, the accumulated coverage is flushed to
+        // '<coverageFile>.<oldEpoch>' and tracking restarts for the new epoch.
+        private static string _cachedEpochFilePath = string.Empty;
+        private static long _lastEpochFileVersion = -1;
+        private static int _currentEpoch; // 0 = no epoch observed yet
+
         // this attribute will be set by the Stryker Data Collector before each test
         public static bool CaptureCoverage;
         public static int ActiveMutant = -2;
@@ -38,7 +46,14 @@ namespace Stryker
                 _cachedCoverageFilePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), coverageFileName);
                 _coverageFilePathCached = true;
                 CaptureCoverage = true;
-                
+
+                // Per-test (epoch-based) coverage mode; the variable contains only the filename
+                string epochFileName = System.Environment.GetEnvironmentVariable("STRYKER_COVERAGE_EPOCH_FILE") ?? string.Empty;
+                if (!string.IsNullOrEmpty(epochFileName))
+                {
+                    _cachedEpochFilePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), epochFileName);
+                }
+
                 // Register for process exit to flush coverage data
                 if (!_processExitRegistered)
                 {
@@ -125,6 +140,8 @@ namespace Stryker
         /// <summary>
         /// Writes accumulated coverage data to a file for MTP runner IPC.
         /// Called automatically on process exit to capture all coverage from tests run in this process.
+        /// In epoch-based (per-test) mode the data is written to '<coverageFile>.<epoch>' so the
+        /// runner can attribute it to the test that was running during that epoch.
         /// Format: "coveredMutants;staticMutants" (comma-separated IDs)
         /// </summary>
         public static void FlushCoverageToFile()
@@ -146,6 +163,25 @@ namespace Stryker
                 return;
             }
 
+            lock (_coverageLock)
+            {
+                if (_cachedEpochFilePath.Length > 0)
+                {
+                    // Per-test mode: the accumulator belongs to the currently tracked epoch.
+                    // Epoch 0 means no coverage was ever registered, so there is nothing to write.
+                    if (_currentEpoch > 0)
+                    {
+                        WriteCoverageFile(_cachedCoverageFilePath + "." + _currentEpoch.ToString());
+                    }
+                    return;
+                }
+
+                WriteCoverageFile(_cachedCoverageFilePath);
+            }
+        }
+
+        private static void WriteCoverageFile(string filePath)
+        {
             try
             {
                 lock (_coverageLock)
@@ -153,14 +189,66 @@ namespace Stryker
                     string covered = string.Join(",", _coveredMutants);
                     string staticMutants = string.Join(",", _coveredStaticMutants);
                     string content = covered + ";" + staticMutants;
-                    System.IO.File.WriteAllText(_cachedCoverageFilePath, content);
+                    System.IO.File.WriteAllText(filePath, content);
                     ResetCoverage();
                 }
             }
             catch (System.Exception ex)
             {
                 // Do not fail tests due to coverage write issues; log for diagnostics instead.
-                System.Diagnostics.Debug.WriteLine(string.Format("[Stryker] Failed to flush coverage to file '{0}': {1}", _cachedCoverageFilePath, ex));
+                System.Diagnostics.Debug.WriteLine(string.Format("[Stryker] Failed to flush coverage to file '{0}': {1}", filePath, ex));
+            }
+        }
+
+        /// <summary>
+        /// Detects a change of the coverage epoch (per-test mode). All coverage accumulated so far
+        /// belongs to the previously tracked epoch and is flushed to that epoch's file before
+        /// tracking moves to the new epoch. Must be called before registering new coverage.
+        /// </summary>
+        private static void CheckEpochChange()
+        {
+            if (_cachedEpochFilePath.Length == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!System.IO.File.Exists(_cachedEpochFilePath))
+                {
+                    return;
+                }
+
+                System.IO.FileInfo fileInfo = new System.IO.FileInfo(_cachedEpochFilePath);
+                long currentVersion = fileInfo.LastWriteTimeUtc.Ticks;
+                if (currentVersion == _lastEpochFileVersion)
+                {
+                    return;
+                }
+
+                string content = System.IO.File.ReadAllText(_cachedEpochFilePath).Trim();
+                int epoch;
+                if (!int.TryParse(content, out epoch))
+                {
+                    return;
+                }
+
+                _lastEpochFileVersion = currentVersion;
+                if (epoch == _currentEpoch)
+                {
+                    return;
+                }
+
+                if (_currentEpoch > 0)
+                {
+                    WriteCoverageFile(_cachedCoverageFilePath + "." + _currentEpoch.ToString());
+                }
+
+                _currentEpoch = epoch;
+            }
+            catch
+            {
+                // Ignore file read errors; coverage stays attributed to the current epoch
             }
         }
 
@@ -226,6 +314,10 @@ namespace Stryker
         {
             lock (_coverageLock)
             {
+                // In per-test mode, a new epoch means the accumulated coverage belongs to the
+                // previous test and must be flushed before this registration is recorded.
+                CheckEpochChange();
+
                 if (!_coveredMutants.Contains(id))
                 {
                     _coveredMutants.Add(id);

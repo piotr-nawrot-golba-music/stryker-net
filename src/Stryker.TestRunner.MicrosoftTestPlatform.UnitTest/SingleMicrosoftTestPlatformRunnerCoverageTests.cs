@@ -683,4 +683,184 @@ public class SingleMicrosoftTestPlatformRunnerCoverageTests
         coverage[0].Confidence.ShouldBe(CoverageConfidence.Dubious);
         coverage[0].MutationsCovered.ShouldBeEmpty();
     }
+
+    // --- Live (epoch-based) per-test coverage tests ---
+    //
+    // 'perTest' mode keeps the test server alive: the runner bumps an epoch counter file
+    // between tests, and the injected MutantControl flushes each test's coverage to
+    // '<coverageFile>.<epoch>'. These tests simulate the MutantControl side.
+
+    [TestMethod, Timeout(5000)]
+    public async Task RunTestsForLiveCoverage_ShouldAttributeCoveragePerTest()
+    {
+        var assembly = "/fake/assembly.dll";
+        var tests = new List<(TestNode Test, string TestId)>
+        {
+            (new TestNode("t1", "Test1", "test", "discovered"), "t1"),
+            (new TestNode("t2", "Test2", "test", "discovered"), "t2"),
+            (new TestNode("t3", "Test3", "test", "discovered"), "t3"),
+        };
+
+        // t2 covers nothing: it never triggers MutantControl, so no epoch file is written for it
+        using var runner = new LiveCoverageSimulatingRunner(620, _testsByAssembly, _testDescriptions, _testSet, _discoveryLock,
+            new Dictionary<string, int[]>
+            {
+                ["t1"] = [1, 2],
+                ["t3"] = [3],
+            });
+
+        var results = await runner.RunTestsForLiveCoverageAsync(assembly, tests, CoverageConfidence.Normal);
+
+        runner.ObservedEpochs.ShouldBe([1, 2, 3]);
+        runner.ServerStopped.ShouldBeTrue("The server must be stopped to flush the final test's coverage");
+
+        results.Count.ShouldBe(3);
+        var r1 = results.Single(r => r.TestId == "t1");
+        r1.MutationsCovered.OrderBy(x => x).ShouldBe([1, 2]);
+        r1.Confidence.ShouldBe(CoverageConfidence.Normal);
+
+        var r2 = results.Single(r => r.TestId == "t2");
+        r2.MutationsCovered.ShouldBeEmpty();
+        r2.Confidence.ShouldBe(CoverageConfidence.Normal);
+
+        var r3 = results.Single(r => r.TestId == "t3");
+        r3.MutationsCovered.ShouldBe([3]);
+    }
+
+    [TestMethod, Timeout(5000)]
+    public async Task RunTestsForLiveCoverage_ShouldCleanUpEpochFiles()
+    {
+        var assembly = "/fake/assembly.dll";
+        var tests = new List<(TestNode Test, string TestId)>
+        {
+            (new TestNode("t1", "Test1", "test", "discovered"), "t1"),
+        };
+
+        using var runner = new LiveCoverageSimulatingRunner(621, _testsByAssembly, _testDescriptions, _testSet, _discoveryLock,
+            new Dictionary<string, int[]> { ["t1"] = [1] });
+
+        await runner.RunTestsForLiveCoverageAsync(assembly, tests, CoverageConfidence.Normal);
+
+        File.Exists(runner.EpochCoverageFilePath(1)).ShouldBeFalse("Per-epoch coverage files must be cleaned up");
+        File.Exists(Path.Combine(Path.GetTempPath(), "stryker-epoch-621.txt")).ShouldBeFalse("Epoch counter file must be cleaned up");
+    }
+
+    [TestMethod, Timeout(5000)]
+    public async Task RunTestsForLiveCoverage_ShouldReturnDubiousResults_WhenRunFails()
+    {
+        var assembly = "/fake/assembly.dll";
+        var tests = new List<(TestNode Test, string TestId)>
+        {
+            (new TestNode("t1", "Test1", "test", "discovered"), "t1"),
+            (new TestNode("t2", "Test2", "test", "discovered"), "t2"),
+        };
+
+        using var runner = new LiveCoverageSimulatingRunner(622, _testsByAssembly, _testDescriptions, _testSet, _discoveryLock,
+            new Dictionary<string, int[]>(), failOnRun: true);
+
+        var results = await runner.RunTestsForLiveCoverageAsync(assembly, tests, CoverageConfidence.Normal);
+
+        results.Count.ShouldBe(2);
+        results.ShouldAllBe(r => r.Confidence == CoverageConfidence.Dubious);
+        results.ShouldAllBe(r => !r.MutationsCovered.Any());
+    }
+
+    [TestMethod, Timeout(5000)]
+    public void SetCoverageMode_ShouldTrackLiveMode()
+    {
+        using var runner = new SingleMicrosoftTestPlatformRunner(
+            623, _testsByAssembly, _testDescriptions, _testSet, _discoveryLock, NullLogger.Instance);
+
+        var coverageField = typeof(SingleMicrosoftTestPlatformRunner).GetField("_coverageMode",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var liveField = typeof(SingleMicrosoftTestPlatformRunner).GetField("_liveCoverageMode",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+        runner.SetCoverageMode(true, live: true);
+        coverageField.GetValue(runner).ShouldBe(true);
+        liveField.GetValue(runner).ShouldBe(true);
+
+        runner.SetCoverageMode(false);
+        coverageField.GetValue(runner).ShouldBe(false);
+        liveField.GetValue(runner).ShouldBe(false);
+
+        runner.SetCoverageMode(true);
+        coverageField.GetValue(runner).ShouldBe(true);
+        liveField.GetValue(runner).ShouldBe(false, "Plain coverage mode must not enable live (per-test) mode");
+    }
+
+    /// <summary>
+    /// Simulates the injected MutantControl's epoch behavior: coverage accumulates while a test
+    /// runs and is flushed to '&lt;coverageFile&gt;.&lt;epoch&gt;' when a NEW epoch is observed
+    /// (i.e. during the next covering test) or on process exit (server stop).
+    /// </summary>
+    private class LiveCoverageSimulatingRunner : SingleMicrosoftTestPlatformRunner
+    {
+        private readonly Dictionary<string, int[]> _coverageByTestUid;
+        private readonly bool _failOnRun;
+        private readonly string _epochFilePath;
+        private int _trackedEpoch;
+        private int[] _accumulator = [];
+
+        public List<int> ObservedEpochs { get; } = [];
+        public bool ServerStopped { get; private set; }
+
+        public LiveCoverageSimulatingRunner(
+            int id,
+            Dictionary<string, List<TestNode>> testsByAssembly,
+            Dictionary<string, MtpTestDescription> testDescriptions,
+            TestSet testSet,
+            object discoveryLock,
+            Dictionary<string, int[]> coverageByTestUid,
+            bool failOnRun = false)
+            : base(id, testsByAssembly, testDescriptions, testSet, discoveryLock, NullLogger.Instance)
+        {
+            _coverageByTestUid = coverageByTestUid;
+            _failOnRun = failOnRun;
+            _epochFilePath = Path.Combine(Path.GetTempPath(), $"stryker-epoch-{id}.txt");
+        }
+
+        internal override Task ExecuteSingleTestAsync(string assembly, TestNode test)
+        {
+            if (_failOnRun)
+            {
+                throw new InvalidOperationException("simulated server failure");
+            }
+
+            var epoch = int.Parse(File.ReadAllText(_epochFilePath).Trim());
+            ObservedEpochs.Add(epoch);
+
+            if (!_coverageByTestUid.TryGetValue(test.Uid, out var covered))
+            {
+                // test executes no mutated code: MutantControl never runs, nothing is flushed
+                return Task.CompletedTask;
+            }
+
+            if (_trackedEpoch > 0 && _trackedEpoch != epoch)
+            {
+                Flush();
+            }
+
+            _trackedEpoch = epoch;
+            _accumulator = covered;
+            return Task.CompletedTask;
+        }
+
+        internal override Task StopAndRemoveServerAsync(string assembly)
+        {
+            ServerStopped = true;
+            if (_trackedEpoch > 0)
+            {
+                Flush();
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private void Flush()
+        {
+            File.WriteAllText(EpochCoverageFilePath(_trackedEpoch), string.Join(",", _accumulator) + ";");
+            _accumulator = [];
+        }
+    }
 }
