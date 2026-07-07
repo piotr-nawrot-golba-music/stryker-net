@@ -3,6 +3,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Shouldly;
 using Stryker.Abstractions;
+using Stryker.Abstractions.Exceptions;
+using Stryker.Abstractions.Options;
 using Stryker.Abstractions.Testing;
 using Stryker.TestRunner.Tests;
 using Stryker.TestRunner.MicrosoftTestPlatform.Models;
@@ -40,7 +42,7 @@ public class SingleMicrosoftTestPlatformRunnerTests
 
         using var runner = CreateRunner(0);
 
-        // Act - This will call RunAllTestsAsync -> ProcessSingleAssemblyAsync -> RunAssemblyTestsAsync
+        // Act - This will call RunAllTestsAsync -> RunAssemblyTestsAsync
         // RunAssemblyTestsAsync will handle the exception when GetOrCreateServerAsync fails
         var result = await runner.InitialTestAsync(project.Object);
 
@@ -65,7 +67,7 @@ public class SingleMicrosoftTestPlatformRunnerTests
 
         using var runner = CreateRunner(0);
 
-        // Act - Calls RunAllTestsAsync -> ProcessSingleAssemblyAsync -> RunAssemblyTestsAsync
+        // Act - Calls RunAllTestsAsync -> RunAssemblyTestsAsync
         var result = await runner.TestMultipleMutantsAsync(project.Object, null, mutants, null);
 
         // Assert - RunAssemblyTestsAsync catches exceptions and returns TestRunResult
@@ -418,7 +420,7 @@ public class SingleMicrosoftTestPlatformRunnerTests
     }
 
     [TestMethod, Timeout(1000)]
-    public async Task RunAssemblyTestsAsync_WithMultipleMutants_UsesNegativeOneMutantId()
+    public async Task RunAssemblyTestsAsync_WithMultipleMutants_ThrowsWithoutCoverageAnalysis()
     {
         // Arrange
         var project = new Mock<IProjectAndTests>();
@@ -432,12 +434,10 @@ public class SingleMicrosoftTestPlatformRunnerTests
 
         using var runner = CreateRunner(0);
 
-        // Act - With multiple mutants, mutantId should be -1 (no mutation)
-        var result = await runner.TestMultipleMutantsAsync(project.Object, null, mutants, null);
-
-        // Assert
-        result.ShouldNotBeNull();
-        result.ExecutedTests.ShouldNotBeNull();
+        // Act & Assert - Multiple mutants can only be tested together with coverage analysis,
+        // since the file-based mutant control activates one mutant per test run
+        await Should.ThrowAsync<GeneralStrykerException>(
+            async () => await runner.TestMultipleMutantsAsync(project.Object, null, mutants, null));
     }
 
     [TestMethod, Timeout(1000)]
@@ -769,7 +769,7 @@ public class SingleMicrosoftTestPlatformRunnerTests
     }
 
     [TestMethod, Timeout(1000)]
-    public async Task TestMultipleMutantsAsync_ShouldUseNoMutationId_WhenMultipleMutants()
+    public async Task TestMultipleMutantsAsync_ShouldThrow_WhenMultipleMutantsWithoutCoverageAnalysis()
     {
         // Arrange
         var project = new Mock<IProjectAndTests>();
@@ -789,12 +789,9 @@ public class SingleMicrosoftTestPlatformRunnerTests
             _discoveryLock,
             NullLogger.Instance);
 
-        // Act
-        var result = await runner.TestMultipleMutantsAsync(project.Object, null, mutants, null);
-
-        // Assert
-        result.ShouldNotBeNull();
-        result.ExecutedTests.ShouldNotBeNull();
+        // Act & Assert
+        await Should.ThrowAsync<GeneralStrykerException>(
+            async () => await runner.TestMultipleMutantsAsync(project.Object, null, mutants, null));
     }
 
     [TestMethod, Timeout(1000)]
@@ -1304,6 +1301,186 @@ public class SingleMicrosoftTestPlatformRunnerTests
         result.SessionTimedOut.ShouldBeFalse();
     }
 
+    // --- Coverage-based test filtering tests ---
+    //
+    // With coverageAnalysis enabled, mutants must only be tested against the tests that
+    // cover them (mutant.AssessingTests), activating each mutant of a group in turn.
+
+    private static Mock<IStrykerOptions> CoverageOptions()
+    {
+        var options = new Mock<IStrykerOptions>();
+        options.Setup(x => x.OptimizationMode).Returns(OptimizationModes.CoverageBasedTest);
+        return options;
+    }
+
+    private static Mock<IMutant> MutantCoveredBy(int id, params string[] testUids)
+    {
+        var mutant = new Mock<IMutant>();
+        mutant.Setup(x => x.Id).Returns(id);
+        mutant.Setup(x => x.AssessingTests).Returns(new TestIdentifierList(testUids));
+        return mutant;
+    }
+
+    private FilterRecordingRunner CreateFilterRecordingRunner(int id, string assembly, params string[] testUids)
+    {
+        var tests = testUids.Select(uid => new TestNode(uid, uid, "test", "discovered")).ToList();
+        _testsByAssembly[assembly] = tests;
+        foreach (var test in tests)
+        {
+            _testDescriptions[test.Uid] = new MtpTestDescription(test);
+        }
+
+        return new FilterRecordingRunner(
+            id, _testsByAssembly, _testDescriptions, _testSet, _discoveryLock, CoverageOptions().Object);
+    }
+
+    [TestMethod, Timeout(1000)]
+    public async Task TestMultipleMutantsAsync_WithCoverage_RunsOnlyCoveringTests()
+    {
+        var assembly = "/fake/assembly.dll";
+        using var runner = CreateFilterRecordingRunner(81, assembly, "uid-1", "uid-2", "uid-3");
+
+        var project = new Mock<IProjectAndTests>();
+        project.Setup(x => x.GetTestAssemblies()).Returns([assembly]);
+
+        var mutant = MutantCoveredBy(42, "uid-2");
+
+        var result = await runner.TestMultipleMutantsAsync(project.Object, null, [mutant.Object], null);
+
+        runner.Calls.Count.ShouldBe(1);
+        runner.Calls[0].ActiveMutantId.ShouldBe(42);
+        runner.Calls[0].Filter.ShouldNotBeNull();
+        runner.Calls[0].Filter.ShouldBe(new[] { "uid-2" });
+
+        // the executed set must not be compressed to 'every test' when tests were filtered
+        result.ExecutedTests.IsEveryTest.ShouldBeFalse();
+        result.ExecutedTests.GetIdentifiers().ShouldBe(["uid-2"]);
+    }
+
+    [TestMethod, Timeout(1000)]
+    public async Task TestMultipleMutantsAsync_WithCoverage_ActivatesEachMutantOfGroupAgainstItsOwnTests()
+    {
+        var assembly = "/fake/assembly.dll";
+        using var runner = CreateFilterRecordingRunner(82, assembly, "uid-1", "uid-2", "uid-3");
+
+        var project = new Mock<IProjectAndTests>();
+        project.Setup(x => x.GetTestAssemblies()).Returns([assembly]);
+
+        var mutant1 = MutantCoveredBy(1, "uid-1");
+        var mutant2 = MutantCoveredBy(2, "uid-2", "uid-3");
+
+        IReadOnlyList<IMutant>? updatedMutants = null;
+        var updateCalls = 0;
+        bool Update(IReadOnlyList<IMutant> testedMutants, ITestIdentifiers failed, ITestIdentifiers ran, ITestIdentifiers timedOut)
+        {
+            updateCalls++;
+            updatedMutants = testedMutants;
+            return true;
+        }
+
+        var result = await runner.TestMultipleMutantsAsync(
+            project.Object, null, [mutant1.Object, mutant2.Object], Update);
+
+        runner.Calls.Count.ShouldBe(2);
+        runner.Calls[0].ActiveMutantId.ShouldBe(1);
+        runner.Calls[0].Filter.ShouldBe(new[] { "uid-1" });
+        runner.Calls[1].ActiveMutantId.ShouldBe(2);
+        runner.Calls[1].Filter!.OrderBy(x => x).ShouldBe(["uid-2", "uid-3"]);
+
+        updateCalls.ShouldBe(1);
+        updatedMutants.ShouldNotBeNull();
+        updatedMutants!.Count.ShouldBe(2);
+        result.ExecutedTests.GetIdentifiers().OrderBy(x => x).ShouldBe(["uid-1", "uid-2", "uid-3"]);
+    }
+
+    [TestMethod, Timeout(1000)]
+    public async Task TestMultipleMutantsAsync_WithCoverage_RunsAllTestsForEveryTestMutant()
+    {
+        var assembly = "/fake/assembly.dll";
+        using var runner = CreateFilterRecordingRunner(83, assembly, "uid-1", "uid-2");
+
+        var project = new Mock<IProjectAndTests>();
+        project.Setup(x => x.GetTestAssemblies()).Returns([assembly]);
+
+        // e.g. a static mutant: covered by every test
+        var mutant = new Mock<IMutant>();
+        mutant.Setup(x => x.Id).Returns(7);
+        mutant.Setup(x => x.AssessingTests).Returns(TestIdentifierList.EveryTest());
+
+        var result = await runner.TestMultipleMutantsAsync(project.Object, null, [mutant.Object], null);
+
+        runner.Calls.Count.ShouldBe(1);
+        runner.Calls[0].ActiveMutantId.ShouldBe(7);
+        runner.Calls[0].Filter.ShouldBeNull();
+
+        // no filtering took place, so the executed set may compress to 'every test'
+        result.ExecutedTests.IsEveryTest.ShouldBeTrue();
+    }
+
+    [TestMethod, Timeout(1000)]
+    public async Task TestMultipleMutantsAsync_WithCoverage_ReturnsWithoutRunning_WhenNoTestsCoverMutants()
+    {
+        var assembly = "/fake/assembly.dll";
+        using var runner = CreateFilterRecordingRunner(84, assembly, "uid-1");
+
+        var project = new Mock<IProjectAndTests>();
+        project.Setup(x => x.GetTestAssemblies()).Returns([assembly]);
+
+        var mutant = MutantCoveredBy(9 /* no covering tests */);
+
+        var result = await runner.TestMultipleMutantsAsync(project.Object, null, [mutant.Object], null);
+
+        runner.Calls.ShouldBeEmpty();
+        result.ExecutedTests.IsEmpty.ShouldBeTrue();
+        result.ResultMessage.ShouldBe("Mutants are not covered by any test!");
+    }
+
+    private class FilterRecordingRunner : SingleMicrosoftTestPlatformRunner
+    {
+        private readonly string _mutantFilePath;
+
+        public FilterRecordingRunner(
+            int id,
+            Dictionary<string, List<TestNode>> testsByAssembly,
+            Dictionary<string, MtpTestDescription> testDescriptions,
+            TestSet testSet,
+            object discoveryLock,
+            IStrykerOptions options)
+            : base(id, testsByAssembly, testDescriptions, testSet, discoveryLock, NullLogger.Instance, options)
+        {
+            _mutantFilePath = Path.Combine(Path.GetTempPath(), $"stryker-mutant-{id}.txt");
+        }
+
+        public List<(string Assembly, int ActiveMutantId, IReadOnlySet<string>? Filter)> Calls { get; } = [];
+
+        internal override Task<(TestRunResult? Result, bool TimedOut, List<TestNode>? TestsRun)> RunAssemblyTestsAsync(
+            string assembly, ITimeoutValueCalculator? timeoutCalc, IReadOnlySet<string>? testUidFilter = null)
+        {
+            var activeMutantId = int.Parse(File.ReadAllText(_mutantFilePath).Trim());
+            Calls.Add((assembly, activeMutantId, testUidFilter));
+
+            var discoveredTests = GetDiscoveredTests(assembly);
+            var testsRun = testUidFilter is null
+                ? discoveredTests
+                : discoveredTests?.Where(t => testUidFilter.Contains(t.Uid)).ToList();
+
+            var executedTests = testsRun is not null && testsRun.Count == discoveredTests!.Count
+                ? TestIdentifierList.EveryTest()
+                : new TestIdentifierList(testsRun?.Select(t => t.Uid) ?? []);
+
+            var result = new TestRunResult(
+                Array.Empty<IFrameworkTestDescription>(),
+                executedTests,
+                TestIdentifierList.NoTest(),
+                TestIdentifierList.NoTest(),
+                string.Empty,
+                Enumerable.Empty<string>(),
+                TimeSpan.Zero);
+
+            return Task.FromResult<(TestRunResult?, bool, List<TestNode>?)>((result, false, testsRun));
+        }
+    }
+
     private class TestableRunner : SingleMicrosoftTestPlatformRunner
     {
         private int _disposeLogicExecutedCount;
@@ -1382,8 +1559,8 @@ public class SingleMicrosoftTestPlatformRunnerTests
             ILogger logger)
             : base(id, testsByAssembly, testDescriptions, testSet, discoveryLock, logger) { }
 
-        internal override Task<(TestRunResult? Result, bool TimedOut, List<TestNode>? DiscoveredTests)> RunAssemblyTestsAsync(
-            string assembly, ITimeoutValueCalculator? timeoutCalc)
+        internal override Task<(TestRunResult? Result, bool TimedOut, List<TestNode>? TestsRun)> RunAssemblyTestsAsync(
+            string assembly, ITimeoutValueCalculator? timeoutCalc, IReadOnlySet<string>? testUidFilter = null)
         {
             var discoveredTests = GetDiscoveredTests(assembly);
             var result = new TestRunResult(
@@ -1409,8 +1586,8 @@ public class SingleMicrosoftTestPlatformRunnerTests
             ILogger logger)
             : base(id, testsByAssembly, testDescriptions, testSet, discoveryLock, logger) { }
 
-        internal override Task<(TestRunResult? Result, bool TimedOut, List<TestNode>? DiscoveredTests)> RunAssemblyTestsAsync(
-            string assembly, ITimeoutValueCalculator? timeoutCalc)
+        internal override Task<(TestRunResult? Result, bool TimedOut, List<TestNode>? TestsRun)> RunAssemblyTestsAsync(
+            string assembly, ITimeoutValueCalculator? timeoutCalc, IReadOnlySet<string>? testUidFilter = null)
         {
             var discoveredTests = GetDiscoveredTests(assembly);
             var result = new TestRunResult(
