@@ -341,6 +341,7 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
         testSet.RegisterTest(desc2.Description);
 
         var capturedTests = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var runners = new System.Collections.Concurrent.ConcurrentBag<TestableRunner>();
 
         var runnerFactory = new Mock<ISingleRunnerFactory>();
         runnerFactory.Setup(x => x.CreateRunner(
@@ -362,7 +363,7 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
                         foreach (var kvp in testDescriptions)
                             td[kvp.Key] = kvp.Value;
                     }
-                    return new TestableRunner(id, tba, td, ts, dl,
+                    var runner = new TestableRunner(id, tba, td, ts, dl,
                         () => { },
                         coverageHandler: (assembly, test, testId, confidence) =>
                         {
@@ -373,6 +374,8 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
                             return Task.FromResult<ICoverageRunResult>(
                                 CoverageRunResult.Create(testId, confidence, covered, Array.Empty<int>(), Array.Empty<int>()));
                         });
+                    runners.Add(runner);
+                    return runner;
                 });
 
         var project = new Mock<IProjectAndTests>();
@@ -387,8 +390,13 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
         capturedTests.Count.ShouldBe(2, "Both tests should have been captured individually");
         coverage.Count.ShouldBe(2, "Should return one coverage result per test");
 
-        // Plain perTest (no CaptureCoveragePerTest flag) -> Normal confidence.
-        // perTestInIsolation -> Exact is covered by CaptureCoverage_ShouldUseExactConfidence_WhenPerTestInIsolationEnabled.
+        // Plain perTest (no CaptureCoveragePerTest flag) -> Normal confidence, live in-process
+        // capture (no test host restart). perTestInIsolation -> Exact is covered by
+        // CaptureCoverage_ShouldUseExactConfidence_WhenPerTestInIsolationEnabled.
+        var coverageCalls = runners.SelectMany(r => r.CoverageCalls).ToList();
+        coverageCalls.ShouldAllBe(c => c == "inProcess",
+            "perTest must capture coverage in the live test host, not restart it per test");
+
         var cov1 = coverage.First(c => c.TestId == desc1.Id);
         cov1.MutationsCovered.ShouldContain(1);
         cov1.MutationsCovered.ShouldContain(2);
@@ -421,6 +429,7 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
         testSet.RegisterTest(desc.Description);
 
         CoverageConfidence? capturedConfidence = null;
+        var runners = new System.Collections.Concurrent.ConcurrentBag<TestableRunner>();
 
         var runnerFactory = new Mock<ISingleRunnerFactory>();
         runnerFactory.Setup(x => x.CreateRunner(
@@ -441,7 +450,7 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
                         foreach (var kvp in testDescriptions)
                             td[kvp.Key] = kvp.Value;
                     }
-                    return new TestableRunner(id, tba, td, ts, dl,
+                    var runner = new TestableRunner(id, tba, td, ts, dl,
                         () => { },
                         coverageHandler: (assembly, test, testId, confidence) =>
                         {
@@ -449,6 +458,8 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
                             return Task.FromResult<ICoverageRunResult>(
                                 CoverageRunResult.Create(testId, confidence, new[] { 1 }, Array.Empty<int>(), Array.Empty<int>()));
                         });
+                    runners.Add(runner);
+                    return runner;
                 });
 
         var project = new Mock<IProjectAndTests>();
@@ -463,6 +474,11 @@ public class MicrosoftTestPlatformRunnerPoolTests : TestBase
         capturedConfidence.ShouldBe(CoverageConfidence.Exact,
             "perTestInIsolation should use Exact confidence");
         coverage.Single().Confidence.ShouldBe(CoverageConfidence.Exact);
+
+        var coverageCalls = runners.SelectMany(r => r.CoverageCalls).ToList();
+        coverageCalls.ShouldAllBe(c => c == "isolation",
+            "perTestInIsolation must restart the test host per test");
+        coverageCalls.ShouldNotBeEmpty();
     }
 
     [TestMethod]

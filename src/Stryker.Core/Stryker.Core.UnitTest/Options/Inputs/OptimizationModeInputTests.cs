@@ -14,39 +14,28 @@ public class OptimizationModeInputTests : TestBase
 {
     private readonly Mock<ILogger<CoverageAnalysisInput>> _loggerMock = new();
 
-    private const string PromotionWarning =
-        "The Microsoft Test Platform runner captures per-test coverage in isolation; 'perTest' "
-        + "(process reuse) is not yet available and has been upgraded to 'perTestInIsolation'. "
-        + "Process reuse for MTP is planned as a follow-up.";
-
     [TestMethod]
     [DataRow(null)]
     [DataRow("perTest")]
-    public void ShouldPromotePerTestToIsolationForMtp(string value)
+    public void ShouldKeepPerTestForMtp(string value)
     {
+        // perTest is supported on MTP via an on-demand coverage flush in the live test host,
+        // so it must not be promoted to perTestInIsolation
         var result = new CoverageAnalysisInput { SuppliedInput = value }
             .Validate(RunnerKind.MicrosoftTestPlatform, _loggerMock.Object);
 
         result.HasFlag(OptimizationModes.CoverageBasedTest).ShouldBeTrue();
+        result.HasFlag(OptimizationModes.CaptureCoveragePerTest).ShouldBeFalse();
+    }
+
+    [TestMethod]
+    public void ShouldKeepExplicitIsolationForMtp()
+    {
+        var result = new CoverageAnalysisInput { SuppliedInput = "perTestInIsolation" }
+            .Validate(RunnerKind.MicrosoftTestPlatform, _loggerMock.Object);
+
+        result.HasFlag(OptimizationModes.CoverageBasedTest).ShouldBeTrue();
         result.HasFlag(OptimizationModes.CaptureCoveragePerTest).ShouldBeTrue();
-    }
-
-    [TestMethod]
-    public void ShouldWarnWhenMtpPromotesExplicitPerTest()
-    {
-        new CoverageAnalysisInput { SuppliedInput = "perTest" }
-            .Validate(RunnerKind.MicrosoftTestPlatform, _loggerMock.Object);
-
-        _loggerMock.Verify(LogLevel.Warning, PromotionWarning, Times.Once);
-    }
-
-    [TestMethod]
-    public void ShouldNotWarnWhenMtpUsesDefault()
-    {
-        new CoverageAnalysisInput { SuppliedInput = null }
-            .Validate(RunnerKind.MicrosoftTestPlatform, _loggerMock.Object);
-
-        _loggerMock.Verify(LogLevel.Warning, PromotionWarning, Times.Never);
     }
 
     [TestMethod]
@@ -56,7 +45,6 @@ public class OptimizationModeInputTests : TestBase
             .Validate(RunnerKind.VsTest, _loggerMock.Object);
 
         result.HasFlag(OptimizationModes.CaptureCoveragePerTest).ShouldBeFalse();
-        _loggerMock.Verify(LogLevel.Warning, PromotionWarning, Times.Never);
     }
 
     [TestMethod]

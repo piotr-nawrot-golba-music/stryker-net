@@ -35,7 +35,27 @@ internal class TestableRunner : SingleMicrosoftTestPlatformRunner
         _coverageHandler = coverageHandler;
     }
 
-    internal override async Task<ICoverageRunResult> RunSingleTestForCoverageAsync(
+    /// <summary>
+    /// Records which capture flavor the pool routed to: "isolation" for
+    /// RunSingleTestForCoverageAsync, "inProcess" for RunSingleTestForCoverageInProcessAsync.
+    /// </summary>
+    public System.Collections.Concurrent.ConcurrentQueue<string> CoverageCalls { get; } = new();
+
+    internal override Task<ICoverageRunResult> RunSingleTestForCoverageAsync(
+        string assembly, TestNode test, string testId, CoverageConfidence confidence)
+    {
+        CoverageCalls.Enqueue("isolation");
+        return HandleCoverageAsync(assembly, test, testId, confidence);
+    }
+
+    internal override Task<ICoverageRunResult> RunSingleTestForCoverageInProcessAsync(
+        string assembly, TestNode test, string testId, CoverageConfidence confidence)
+    {
+        CoverageCalls.Enqueue("inProcess");
+        return HandleCoverageAsync(assembly, test, testId, confidence);
+    }
+
+    private async Task<ICoverageRunResult> HandleCoverageAsync(
         string assembly, TestNode test, string testId, CoverageConfidence confidence)
     {
         if (_coverageHandler is not null)

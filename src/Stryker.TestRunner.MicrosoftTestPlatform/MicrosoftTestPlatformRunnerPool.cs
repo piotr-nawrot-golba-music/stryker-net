@@ -106,13 +106,12 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
     {
         if (_options.OptimizationMode.HasFlag(OptimizationModes.CoverageBasedTest))
         {
-            // Coverage captured in isolation (perTestInIsolation) is Exact; plain perTest is Normal.
-            // The mode is resolved upfront in option validation (MTP promotes perTest -> isolation),
-            // so this reflects what is actually running. Mirrors VsTestRunnerPool.
-            var confidence = _options.OptimizationMode.HasFlag(OptimizationModes.CaptureCoveragePerTest)
-                ? CoverageConfidence.Exact
-                : CoverageConfidence.Normal;
-            return CaptureCoverageTestByTest(confidence);
+            // perTestInIsolation restarts the test host per test (Exact coverage);
+            // perTest keeps the host alive and requests on-demand flushes (Normal coverage,
+            // shared process state between tests). Mirrors VsTestRunnerPool.
+            var isolation = _options.OptimizationMode.HasFlag(OptimizationModes.CaptureCoveragePerTest);
+            var confidence = isolation ? CoverageConfidence.Exact : CoverageConfidence.Normal;
+            return CaptureCoverageTestByTest(confidence, isolation);
         }
 
         return CaptureCoverageInOneGo(project);
@@ -176,9 +175,11 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
     }
 
     private IEnumerable<ICoverageRunResult> CaptureCoverageTestByTest(
-        CoverageConfidence confidence)
+        CoverageConfidence confidence, bool isolation)
     {
-        _logger.LogInformation("Starting per-test coverage capture for MTP runner");
+        _logger.LogInformation(
+            "Starting per-test coverage capture for MTP runner ({Mode})",
+            isolation ? "test host restarted per test" : "live test host, on-demand flush");
 
         foreach (var runner in _availableRunners)
         {
@@ -209,9 +210,13 @@ public sealed class MicrosoftTestPlatformRunnerPool : ITestRunner
                 testInfo =>
                 {
                     var result = RunThisAsync(async runner =>
-                        await runner.RunSingleTestForCoverageAsync(
-                            testInfo.Assembly, testInfo.Test, testInfo.TestId, confidence)
-                            .ConfigureAwait(false))
+                        isolation
+                            ? await runner.RunSingleTestForCoverageAsync(
+                                testInfo.Assembly, testInfo.Test, testInfo.TestId, confidence)
+                                .ConfigureAwait(false)
+                            : await runner.RunSingleTestForCoverageInProcessAsync(
+                                testInfo.Assembly, testInfo.Test, testInfo.TestId, confidence)
+                                .ConfigureAwait(false))
                         .GetAwaiter().GetResult();
 
                     results.Add(result);

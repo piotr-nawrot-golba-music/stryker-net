@@ -33,6 +33,10 @@ namespace Stryker
         private static bool _coverageFilePathCached;
         private static bool _processExitRegistered;
 
+        // Signal file for on-demand coverage flush (MTP live per-test coverage, no process restart)
+        private static string _signalFilePath = string.Empty;
+        private static string _lastSignalToken = string.Empty;
+
         // this attribute will be set by the Stryker Data Collector before each test
         public static bool CaptureCoverage;
         public static int ActiveMutant = -2;
@@ -57,6 +61,95 @@ namespace Stryker
                     System.AppDomain.CurrentDomain.ProcessExit += delegate { FlushCoverageToFile(); };
                     _processExitRegistered = true;
                 }
+
+                // When a signal file is configured, the runner can request a coverage flush
+                // on demand (after each test) instead of restarting this process.
+                string signalFileName = System.Environment.GetEnvironmentVariable("STRYKER_COVERAGE_SIGNAL_FILE") ?? string.Empty;
+                if (!string.IsNullOrEmpty(signalFileName))
+                {
+                    _signalFilePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), signalFileName);
+                    System.Threading.Thread pollThread = new System.Threading.Thread(new System.Threading.ThreadStart(PollCoverageSignal));
+                    pollThread.IsBackground = true;
+                    pollThread.Name = "StrykerCoverageSignal";
+                    pollThread.Start();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Polls the signal file written by the Stryker runner. When the runner writes a new
+        /// token, the accumulated coverage is flushed to the coverage file tagged with that
+        /// token so the runner can attribute it to the test that just ran, without restarting
+        /// this process. Written format: "token|coveredMutants;staticMutants|end".
+        /// </summary>
+        private static void PollCoverageSignal()
+        {
+            // Seed with whatever token is already in the signal file: a legit token for this
+            // host can only be written after one of its tests finished, so any pre-existing
+            // token is stale (leftover from an earlier host) and must not trigger a flush
+            // that would reset the coverage accumulated during startup (static constructors).
+            try
+            {
+                _lastSignalToken = ReadSignalFile();
+            }
+            catch
+            {
+                // Treat an unreadable file as "no token seen yet"
+            }
+
+            while (true)
+            {
+                try
+                {
+                    string token = ReadSignalFile();
+                    if (token.Length > 0 && token != _lastSignalToken)
+                    {
+                        FlushCoverageForToken(token);
+                        _lastSignalToken = token;
+                    }
+                }
+                catch
+                {
+                    // Never let the poll thread die on IO races; the write is retried on the
+                    // next tick because _lastSignalToken is only updated after a successful flush.
+                }
+                System.Threading.Thread.Sleep(15);
+            }
+        }
+
+        /// <summary>
+        /// Reads the signal file with FileShare.ReadWrite | FileShare.Delete so the Stryker
+        /// runner can overwrite (or delete) the file while this read is in flight; a plain
+        /// File.ReadAllText would hold FileShare.Read and make the runner's token write fail
+        /// with a sharing violation on Windows.
+        /// </summary>
+        private static string ReadSignalFile()
+        {
+            if (!System.IO.File.Exists(_signalFilePath))
+            {
+                return string.Empty;
+            }
+
+            using (System.IO.FileStream stream = new System.IO.FileStream(
+                _signalFilePath,
+                System.IO.FileMode.Open,
+                System.IO.FileAccess.Read,
+                System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete))
+            using (System.IO.StreamReader reader = new System.IO.StreamReader(stream))
+            {
+                return reader.ReadToEnd().Trim();
+            }
+        }
+
+        private static void FlushCoverageForToken(string token)
+        {
+            lock (_coverageLock)
+            {
+                string covered = string.Join(",", _coveredMutants);
+                string staticMutants = string.Join(",", _coveredStaticMutants);
+                string content = token + "|" + covered + ";" + staticMutants + "|end";
+                System.IO.File.WriteAllText(_cachedCoverageFilePath, content);
+                ResetCoverage();
             }
         }
 

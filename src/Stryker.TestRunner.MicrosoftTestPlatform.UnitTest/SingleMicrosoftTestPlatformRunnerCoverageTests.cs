@@ -620,4 +620,166 @@ public class SingleMicrosoftTestPlatformRunnerCoverageTests
         coverage[0].Confidence.ShouldBe(CoverageConfidence.Dubious);
         coverage[0].MutationsCovered.ShouldBeEmpty();
     }
+
+    #region Live coverage relay (WaitForTokenedCoverageAsync)
+
+    private const string RelayAssembly = "/path/relay-tests.dll";
+
+    private SingleMicrosoftTestPlatformRunner CreateRelayRunner(int id) =>
+        new(id, _testsByAssembly, _testDescriptions, _testSet, _discoveryLock, NullLogger.Instance);
+
+    [TestMethod, Timeout(5000)]
+    public async Task WaitForTokenedCoverage_ParsesTokenedFlush()
+    {
+        using var runner = CreateRelayRunner(700);
+        var coveragePath = runner.GetCoverageFilePath(RelayAssembly);
+        try
+        {
+            await File.WriteAllTextAsync(coveragePath, "tok-1|1,2;3|end");
+
+            var (covered, staticMutants, flushed) =
+                await runner.WaitForTokenedCoverageAsync(RelayAssembly, "tok-1", TimeSpan.FromSeconds(2));
+
+            flushed.ShouldBeTrue();
+            covered.ShouldBe(new[] { 1, 2 });
+            staticMutants.ShouldBe(new[] { 3 });
+        }
+        finally
+        {
+            File.Delete(coveragePath);
+        }
+    }
+
+    [TestMethod, Timeout(5000)]
+    public async Task WaitForTokenedCoverage_ReportsEmptyFlush_AsFlushed()
+    {
+        // A flush with no covered mutants is still a successful flush; it must be
+        // distinguishable from "the test host never flushed" (Dubious)
+        using var runner = CreateRelayRunner(701);
+        var coveragePath = runner.GetCoverageFilePath(RelayAssembly);
+        try
+        {
+            await File.WriteAllTextAsync(coveragePath, "tok-2|;|end");
+
+            var (covered, staticMutants, flushed) =
+                await runner.WaitForTokenedCoverageAsync(RelayAssembly, "tok-2", TimeSpan.FromSeconds(2));
+
+            flushed.ShouldBeTrue();
+            covered.ShouldBeEmpty();
+            staticMutants.ShouldBeEmpty();
+        }
+        finally
+        {
+            File.Delete(coveragePath);
+        }
+    }
+
+    [TestMethod, Timeout(5000)]
+    public async Task WaitForTokenedCoverage_IgnoresStaleToken_AndTimesOut()
+    {
+        // A leftover flush from the previous test carries a different token: it must not be
+        // attributed to the current test
+        using var runner = CreateRelayRunner(702);
+        var coveragePath = runner.GetCoverageFilePath(RelayAssembly);
+        try
+        {
+            await File.WriteAllTextAsync(coveragePath, "old-token|1,2;|end");
+
+            var (covered, _, flushed) =
+                await runner.WaitForTokenedCoverageAsync(RelayAssembly, "new-token", TimeSpan.FromMilliseconds(200));
+
+            flushed.ShouldBeFalse();
+            covered.ShouldBeEmpty();
+        }
+        finally
+        {
+            File.Delete(coveragePath);
+        }
+    }
+
+    [TestMethod, Timeout(5000)]
+    public async Task WaitForTokenedCoverage_IgnoresPartialWrite_UntilComplete()
+    {
+        // Without the "|end" marker the file is treated as still being written
+        using var runner = CreateRelayRunner(703);
+        var coveragePath = runner.GetCoverageFilePath(RelayAssembly);
+        try
+        {
+            await File.WriteAllTextAsync(coveragePath, "tok-4|1,2");
+
+            var completeWrite = Task.Run(async () =>
+            {
+                await Task.Delay(100);
+                await File.WriteAllTextAsync(coveragePath, "tok-4|1,2;|end");
+            });
+
+            var (covered, _, flushed) =
+                await runner.WaitForTokenedCoverageAsync(RelayAssembly, "tok-4", TimeSpan.FromSeconds(3));
+            await completeWrite;
+
+            flushed.ShouldBeTrue();
+            covered.ShouldBe(new[] { 1, 2 });
+        }
+        finally
+        {
+            File.Delete(coveragePath);
+        }
+    }
+
+    [TestMethod]
+    public void BuildEnvironmentVariables_SetsCoverageAndSignalFiles_InCoverageMode()
+    {
+        // The signal env var is what makes the injected MutantControl start its poll thread;
+        // without it the live relay silently degrades to flush-timeouts
+        using var runner = CreateRelayRunner(707);
+        runner.SetCoverageMode(true);
+
+        var envVars = runner.BuildEnvironmentVariables(RelayAssembly);
+
+        envVars["STRYKER_COVERAGE_FILE"].ShouldBe(Path.GetFileName(runner.GetCoverageFilePath(RelayAssembly)));
+        envVars["STRYKER_COVERAGE_SIGNAL_FILE"].ShouldBe(Path.GetFileName(runner.GetSignalFilePath(RelayAssembly)));
+
+        runner.SetCoverageMode(false);
+
+        var withoutCoverage = runner.BuildEnvironmentVariables(RelayAssembly);
+        withoutCoverage.ContainsKey("STRYKER_COVERAGE_FILE").ShouldBeFalse();
+        withoutCoverage.ContainsKey("STRYKER_COVERAGE_SIGNAL_FILE").ShouldBeFalse();
+    }
+
+    [TestMethod, Timeout(5000)]
+    public async Task RunSingleTestForCoverageInProcess_ReturnsDubious_WhenServerCannotStart()
+    {
+        // Nonexistent assembly -> server creation throws -> the exception path must map to a
+        // Dubious empty result instead of propagating
+        using var runner = CreateRelayRunner(706);
+
+        var result = await runner.RunSingleTestForCoverageInProcessAsync(
+            "/nonexistent/assembly.dll",
+            new TestNode("uid-1", "Test1", "action", "passed"),
+            "uid-1",
+            CoverageConfidence.Normal);
+
+        result.Confidence.ShouldBe(CoverageConfidence.Dubious);
+        result.MutationsCovered.ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public void GetSignalFilePath_IsStablePerAssembly_AndDistinctAcrossAssemblies()
+    {
+        // Each live test host polls its own signal file: a token written for one assembly
+        // must never make another assembly's host flush the shared coverage file
+        using var runner = CreateRelayRunner(704);
+        using var otherRunner = CreateRelayRunner(705);
+
+        var pathA1 = runner.GetSignalFilePath("/path/a.dll");
+        var pathA2 = runner.GetSignalFilePath("/path/a.dll");
+        var pathB = runner.GetSignalFilePath("/path/b.dll");
+        var pathAOtherRunner = otherRunner.GetSignalFilePath("/path/a.dll");
+
+        pathA1.ShouldBe(pathA2, "same runner + assembly must map to the same signal file");
+        pathA1.ShouldNotBe(pathB, "different assemblies must not share a signal file");
+        pathA1.ShouldNotBe(pathAOtherRunner, "different runners must not share a signal file");
+    }
+
+    #endregion
 }

@@ -129,8 +129,8 @@ function Run-Category {
     'XUnitMTP' {
       if ($Runtime -ne 'netcore') { throw "XUnitMTP only supports runtime 'netcore'." }
       $xunitMtpWd = Join-Path $RepoRoot 'integrationtest\TargetProjects\MicrosoftTestPlatform\UnitTests.XUnit'
-      # Use the explicit perTest config so CI exercises the MTP perTest -> perTestInIsolation
-      # promotion (and the per-test coverage capture path) end-to-end, not just locally.
+      # Use the explicit perTest config so CI exercises the MTP live per-test coverage relay
+      # (on-demand flush in a reused test host) end-to-end, not just locally.
       if (Test-Path $xunitMtpWd) { Run-Stryker -WorkingDirectory $xunitMtpWd -Arguments @('--config-file', 'stryker-config-perTest.json') } else { Write-Warn "XUnit MTP test project not found at $xunitMtpWd" }
       break
     }
