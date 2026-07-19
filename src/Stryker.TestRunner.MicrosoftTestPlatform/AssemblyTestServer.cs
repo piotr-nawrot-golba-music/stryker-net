@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Serilog.Events;
 using Stryker.Abstractions.Options;
 using Stryker.TestRunner.MicrosoftTestPlatform.Models;
 
@@ -43,6 +42,14 @@ internal sealed class AssemblyTestServer : IDisposable
 
     public bool IsInitialized => _isInitialized;
 
+    /// <summary>
+    /// True when the server has been initialized and its underlying process is still running.
+    /// A test host that crashed mid-run (e.g. a mutation causing a fatal fault such as a
+    /// <see cref="StackOverflowException"/>) leaves <see cref="IsInitialized"/> true while the
+    /// process is gone; this flag detects that so the server can be recreated instead of reused.
+    /// </summary>
+    public bool IsAlive => _isInitialized && !_disposed && _process is { HasExited: false };
+
     public async Task<bool> StartAsync(CancellationToken cancellationToken = default)
     {
         if (_isInitialized)
@@ -77,8 +84,8 @@ internal sealed class AssemblyTestServer : IDisposable
 
             (_stream, _connection) = await acceptTask.ConfigureAwait(false);
 
-            var enableDiagnostic = _options?.LogOptions.LogLevel == LogEventLevel.Verbose;
-            _client = _connectionFactory.CreateClient(_stream, _process.ProcessHandle, enableDiagnostic);
+            var rpcLogFilePath = BuildRpcLogFilePath();
+            _client = _connectionFactory.CreateClient(_stream, _process.ProcessHandle, _logger, rpcLogFilePath);
 
             await _client.InitializeAsync().ConfigureAwait(false);
             _isInitialized = true;
@@ -113,7 +120,7 @@ internal sealed class AssemblyTestServer : IDisposable
         await discoverTestsResponse.WaitCompletionAsync().ConfigureAwait(false);
 
         return discoveredResults
-            .Where(x => x.Node.ExecutionState is "discovered")
+            .Where(x => x.Node.ExecutionState is TestNodeStates.Discovered)
             .Select(x => x.Node)
             .ToList();
     }
@@ -134,34 +141,75 @@ internal sealed class AssemblyTestServer : IDisposable
         var runId = Guid.NewGuid();
         var testResults = new System.Collections.Concurrent.ConcurrentBag<TestNodeUpdate>();
 
-        var executeTestsResponse = await _client.RunTestsAsync(runId, updates =>
+        Func<TestNodeUpdate[], Task> onUpdate = updates =>
         {
             foreach (var update in updates)
             {
                 testResults.Add(update);
             }
             return Task.CompletedTask;
-        }, testsToRun).ConfigureAwait(false);
+        };
 
         if (timeout.HasValue)
         {
-            var completed = await executeTestsResponse.WaitCompletionAsync(timeout.Value).ConfigureAwait(false);
+            ResponseListener executeTestsResponse;
+            try
+            {
+                // The RPC call itself can block when the server is stuck (e.g. infinite loop in mutated code)
+                executeTestsResponse = await _client.RunTestsAsync(runId, onUpdate, testsToRun)
+                    .WaitAsync(timeout.Value).ConfigureAwait(false);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger.LogDebug(ex, "{RunnerId}: Test run RPC call timed out for {Assembly}", _runnerId, _assembly);
+                return (testResults.ToList(), true);
+            }
+
+            var completionTask = executeTestsResponse.WaitCompletionAsync(timeout.Value);
+            await Task.WhenAny(completionTask, _process!.WaitForExitAsync()).ConfigureAwait(false);
+            ThrowIfHostCrashed(completionTask);
+
+            var completed = await completionTask.ConfigureAwait(false);
             return (testResults.ToList(), !completed);
         }
 
-        await executeTestsResponse.WaitCompletionAsync().ConfigureAwait(false);
+        var response = await _client.RunTestsAsync(runId, onUpdate, testsToRun).ConfigureAwait(false);
+        var responseCompletion = response.WaitCompletionAsync();
+        await Task.WhenAny(responseCompletion, _process!.WaitForExitAsync()).ConfigureAwait(false);
+        ThrowIfHostCrashed(responseCompletion);
+
+        await responseCompletion.ConfigureAwait(false);
         return (testResults.ToList(), false);
     }
 
-    public async Task RestartAsync()
+    /// <summary>
+    /// Throws a <see cref="Stryker.TestRunner.TestHostCrashedException"/> when the test host process has exited before the
+    /// run completed. A crashed host never sends a completion signal, so without this check the run would
+    /// otherwise wait out the full timeout and be misreported as a timeout instead of a runtime error.
+    /// </summary>
+    private void ThrowIfHostCrashed(Task runCompletion)
     {
-        await StopAsync().ConfigureAwait(false);
+        if (_process is { HasExited: true } && !runCompletion.IsCompletedSuccessfully)
+        {
+            _logger.LogDebug("{RunnerId}: Test host for {Assembly} exited unexpectedly during the test run", _runnerId, _assembly);
+            throw new Stryker.TestRunner.TestHostCrashedException($"The test host for {_assembly} exited unexpectedly during the test run.");
+        }
+    }
+
+    public async Task RestartAsync(bool force = false)
+    {
+        await StopAsync(force).ConfigureAwait(false);
         await StartAsync().ConfigureAwait(false);
     }
 
-    public async Task StopAsync()
+    public async Task StopAsync(bool force = false)
     {
-        if (_client is not null)
+        if (force)
+        {
+            _logger.LogDebug("{RunnerId}: Force-killing test server process for {Assembly}", _runnerId, _assembly);
+            _process?.ProcessHandle.Kill();
+        }
+        else if (_client is not null)
         {
             try
             {
@@ -173,7 +221,7 @@ internal sealed class AssemblyTestServer : IDisposable
             catch (TimeoutException exception)
             {
                 _logger.LogWarning(exception, "{RunnerId}: Test server process for {Assembly} did not exit within the expected time. Killing forcefully.", _runnerId, _assembly);
-                _process?.ProcessHandle.Kill(); // Force kill if it doesn't exit gracefully
+                _process?.ProcessHandle.Kill();
             }
             catch (Exception exception)
             {
@@ -190,9 +238,31 @@ internal sealed class AssemblyTestServer : IDisposable
         _stream = null;
         _connection?.Dispose();
         _connection = null;
-        _process?.Dispose();
+        try
+        {
+            _process?.Dispose();
+        }
+        catch (Exception)
+        {
+            // Process disposal can fail if kill/cleanup didn't complete in time
+        }
         _process = null;
         _isInitialized = false;
+    }
+
+    /// <summary>
+    /// Returns a per-instance RPC trace log path when log-to-file is enabled, or null otherwise.
+    /// </summary>
+    private string? BuildRpcLogFilePath()
+    {
+        if (_options?.LogOptions.LogToFile != true || string.IsNullOrEmpty(_options.OutputPath))
+        {
+            return null;
+        }
+
+        var logsDirectory = Path.Combine(_options.OutputPath, "logs", "test-servers");
+        var fileName = $"rpc-{Path.GetFileNameWithoutExtension(_assembly)}-{_runnerId}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fffffff}.log";
+        return Path.Combine(logsDirectory, fileName);
     }
 
     public void Dispose()

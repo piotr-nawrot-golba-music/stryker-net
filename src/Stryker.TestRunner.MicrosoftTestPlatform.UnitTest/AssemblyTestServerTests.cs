@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Shouldly;
@@ -41,7 +42,7 @@ public class AssemblyTestServerTests
 
         _factoryMock.Setup(f => f.CreateListener()).Returns((_listenerMock.Object, port));
         _factoryMock.Setup(f => f.StartProcess(TestAssembly, port, _envVars)).Returns(_processMock.Object);
-        _factoryMock.Setup(f => f.CreateClient(stream, _processHandleMock.Object, false)).Returns(_clientMock.Object);
+        _factoryMock.Setup(f => f.CreateClient(stream, _processHandleMock.Object, It.IsAny<ILogger>(), null)).Returns(_clientMock.Object);
 
         _listenerMock.Setup(l => l.AcceptConnectionAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync((stream, connection));
@@ -108,13 +109,13 @@ public class AssemblyTestServerTests
         _listenerMock.Setup(l => l.AcceptConnectionAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync((stream, connection));
         _processMock.Setup(p => p.WaitForExitAsync()).Returns(new TaskCompletionSource().Task);
-        _factoryMock.Setup(f => f.CreateClient(stream, _processHandleMock.Object, false)).Returns(_clientMock.Object);
+        _factoryMock.Setup(f => f.CreateClient(stream, _processHandleMock.Object, It.IsAny<ILogger>(), null)).Returns(_clientMock.Object);
         _clientMock.Setup(c => c.InitializeAsync()).ReturnsAsync((InitializeResponse)null!);
 
         using var server = CreateServer();
         await server.StartAsync();
 
-        _factoryMock.Verify(f => f.CreateClient(stream, _processHandleMock.Object, false), Times.Once);
+        _factoryMock.Verify(f => f.CreateClient(stream, _processHandleMock.Object, It.IsAny<ILogger>(), null), Times.Once);
     }
 
     [TestMethod]
@@ -137,6 +138,42 @@ public class AssemblyTestServerTests
         await server.StartAsync();
 
         server.IsInitialized.ShouldBeTrue();
+    }
+
+    [TestMethod]
+    public void Constructor_ShouldNotBeAlive()
+    {
+        using var server = CreateServer();
+
+        server.IsAlive.ShouldBeFalse();
+    }
+
+    [TestMethod]
+    public async Task StartAsync_ShouldMakeServerAlive_WhenProcessIsRunning()
+    {
+        SetupSuccessfulConnection();
+
+        using var server = CreateServer();
+        await server.StartAsync();
+
+        server.IsAlive.ShouldBeTrue();
+    }
+
+    [TestMethod]
+    public async Task IsAlive_ShouldBeFalse_WhenProcessHasExitedAfterStart()
+    {
+        SetupSuccessfulConnection();
+
+        using var server = CreateServer();
+        await server.StartAsync();
+        server.IsAlive.ShouldBeTrue();
+
+        // Simulate the test host crashing after the server was started:
+        // it stays "initialized" but the underlying process is gone.
+        _processMock.SetupGet(p => p.HasExited).Returns(true);
+
+        server.IsInitialized.ShouldBeTrue();
+        server.IsAlive.ShouldBeFalse();
     }
 
     [TestMethod]
@@ -304,7 +341,7 @@ public class AssemblyTestServerTests
 
         using var server = CreateServer();
         await server.StartAsync();
-        var result = await server.RunTestsAsync(testNodes);
+        await server.RunTestsAsync(testNodes);
 
         _clientMock.Verify(c => c.RunTestsAsync(It.IsAny<Guid>(), It.IsAny<Func<TestNodeUpdate[], Task>>(), testNodes), Times.Once);
     }
@@ -351,7 +388,7 @@ public class AssemblyTestServerTests
 
         using var server = CreateServer();
         await server.StartAsync();
-        var (results, timedOut) = await server.RunTestsAsync(null, TimeSpan.FromSeconds(10));
+        var (_, timedOut) = await server.RunTestsAsync(null, TimeSpan.FromSeconds(10));
 
         timedOut.ShouldBeFalse();
     }
@@ -366,6 +403,63 @@ public class AssemblyTestServerTests
 
         _clientMock.Setup(c => c.RunTestsAsync(It.IsAny<Guid>(), It.IsAny<Func<TestNodeUpdate[], Task>>(), null))
             .ReturnsAsync(listener);
+
+        using var server = CreateServer();
+        await server.StartAsync();
+        var (_, timedOut) = await server.RunTestsAsync(null, TimeSpan.FromMilliseconds(50));
+
+        timedOut.ShouldBeTrue();
+    }
+
+    [TestMethod]
+    public async Task RunTestsAsync_WithTimeout_ShouldThrowTestHostCrashed_WhenProcessExitsDuringRun()
+    {
+        SetupSuccessfulConnection();
+
+        // Listener that never completes (a crashed host never sends a completion signal)
+        var listener = new TestNodeUpdatesResponseListener(Guid.NewGuid(), _ => Task.CompletedTask);
+        _clientMock.Setup(c => c.RunTestsAsync(It.IsAny<Guid>(), It.IsAny<Func<TestNodeUpdate[], Task>>(), null))
+            .ReturnsAsync(listener);
+
+        using var server = CreateServer();
+        await server.StartAsync();
+
+        // Simulate the test host crashing during the run: the process exits before completion.
+        _processMock.Setup(p => p.WaitForExitAsync()).Returns(Task.CompletedTask);
+        _processMock.SetupGet(p => p.HasExited).Returns(true);
+
+        // A crash must be detected immediately as a runtime error, not waited out as a timeout.
+        await Should.ThrowAsync<Stryker.TestRunner.TestHostCrashedException>(
+            async () => await server.RunTestsAsync(null, TimeSpan.FromSeconds(30)));
+    }
+
+    [TestMethod]
+    public async Task RunTestsAsync_WithoutTimeout_ShouldThrowTestHostCrashed_WhenProcessExitsDuringRun()
+    {
+        SetupSuccessfulConnection();
+
+        var listener = new TestNodeUpdatesResponseListener(Guid.NewGuid(), _ => Task.CompletedTask);
+        _clientMock.Setup(c => c.RunTestsAsync(It.IsAny<Guid>(), It.IsAny<Func<TestNodeUpdate[], Task>>(), null))
+            .ReturnsAsync(listener);
+
+        using var server = CreateServer();
+        await server.StartAsync();
+
+        _processMock.Setup(p => p.WaitForExitAsync()).Returns(Task.CompletedTask);
+        _processMock.SetupGet(p => p.HasExited).Returns(true);
+
+        await Should.ThrowAsync<Stryker.TestRunner.TestHostCrashedException>(
+            async () => await server.RunTestsAsync(null));
+    }
+
+    [TestMethod]
+    public async Task RunTestsAsync_WithTimeout_ShouldReturnTimedOutTrue_WhenRpcCallBlocks()
+    {
+        SetupSuccessfulConnection();
+
+        // RPC call that never returns (simulates server stuck in infinite loop)
+        _clientMock.Setup(c => c.RunTestsAsync(It.IsAny<Guid>(), It.IsAny<Func<TestNodeUpdate[], Task>>(), null))
+            .Returns(new TaskCompletionSource<ResponseListener>().Task);
 
         using var server = CreateServer();
         await server.StartAsync();
@@ -405,7 +499,7 @@ public class AssemblyTestServerTests
         using var server = CreateServer();
         await server.StartAsync();
 
-        await Should.NotThrowAsync(server.StopAsync);
+        await Should.NotThrowAsync(() => server.StopAsync());
     }
 
     [TestMethod]
@@ -413,7 +507,7 @@ public class AssemblyTestServerTests
     {
         using var server = CreateServer();
 
-        await Should.NotThrowAsync(server.StopAsync);
+        await Should.NotThrowAsync(() => server.StopAsync());
     }
 
     [TestMethod]
@@ -426,7 +520,7 @@ public class AssemblyTestServerTests
 
         _factoryMock.Setup(f => f.CreateListener()).Returns((_listenerMock.Object, port1));
         _factoryMock.Setup(f => f.StartProcess(TestAssembly, port1, _envVars)).Returns(_processMock.Object);
-        _factoryMock.Setup(f => f.CreateClient(stream1, _processHandleMock.Object, false)).Returns(_clientMock.Object);
+        _factoryMock.Setup(f => f.CreateClient(stream1, _processHandleMock.Object, It.IsAny<ILogger>(), null)).Returns(_clientMock.Object);
         _listenerMock.Setup(l => l.AcceptConnectionAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync((stream1, connection1));
         _processMock.Setup(p => p.WaitForExitAsync()).Returns(new TaskCompletionSource().Task);

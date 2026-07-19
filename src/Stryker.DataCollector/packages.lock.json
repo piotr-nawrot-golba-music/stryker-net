@@ -4,24 +4,24 @@
     ".NETStandard,Version=v2.0": {
       "DotNet.ReproducibleBuilds": {
         "type": "Direct",
-        "requested": "[2.0.2, )",
-        "resolved": "2.0.2",
-        "contentHash": "VaHoEN6YHp0jXucxm67vfuRy8zo9ufiKSuaZ4ZudRi8xmWcEFMKxfCsg2nvYNvdISFTURDu+IHqADGh53+Bamw=="
+        "requested": "[2.0.5, )",
+        "resolved": "2.0.5",
+        "contentHash": "8LrlvI1KpjjJ4VGSqZ16yoOCKlQnYS+Y8rYNifNrscmVh5anJcF9E4e0NiDP30BHBMUbkoJ5KdcxoRWM7Pz9Aw=="
       },
       "Microsoft.TestPlatform.ObjectModel": {
         "type": "Direct",
-        "requested": "[18.3.0, )",
-        "resolved": "18.3.0",
-        "contentHash": "AEIEX2aWdPO9XbtR96eBaJxmXRD9vaI9uQ1T/JbPEKlTAZwYx0ZrMzKyULMdh/HH9Sg03kXCoN7LszQ90o6nPQ==",
+        "requested": "[18.8.1, )",
+        "resolved": "18.8.1",
+        "contentHash": "qLbktNB1+b1XZLNJBTzaWVVJAd6PEzD7cgD406geMb6PcFZhp3EDNa1tctWx1+mtMU6MP/6ozVvFPC9vs2a9rw==",
         "dependencies": {
           "System.Reflection.Metadata": "8.0.0"
         }
       },
       "Microsoft.TestPlatform.Portable": {
         "type": "Direct",
-        "requested": "[18.3.0, )",
-        "resolved": "18.3.0",
-        "contentHash": "vqLOV+5DGaFUX64yL15n3kNAh6wa2ji1ncZ6i2T/YsmBmty5R+g50AR6aDpWDuwup+kyTtBjzslNM0tI9y8iDw=="
+        "requested": "[18.8.1, )",
+        "resolved": "18.8.1",
+        "contentHash": "3UzxQYNb57KLcXwwJGwGsCBZ/4FlHRHKajEK/Fkz+MYUw5NqpubaHZLup6HiQTFYa0UH47J0E4CSiibPtXUYPA=="
       },
       "NETStandard.Library": {
         "type": "Direct",

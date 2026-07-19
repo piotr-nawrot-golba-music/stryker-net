@@ -81,7 +81,7 @@ public class ValidateStrykerResults
 
         var report = await strykerRunOutput.DeserializeJsonReportAsync();
 
-        CheckReportMutants(report, total: 660, ignored: 269, survived: 4, killed: 9, timeout: 2, nocoverage: 338);
+        CheckReportMutants(report, total: 660, ignored: 271, survived: 4, killed: 9, timeout: 2, nocoverage: 340);
         CheckReportTestCounts(report, total: 11);
     }
 
@@ -101,7 +101,7 @@ public class ValidateStrykerResults
 
         var report = await strykerRunOutput.DeserializeJsonReportAsync();
 
-        CheckReportMutants(report, total: 660, ignored: 115, survived: 5, killed: 11, timeout: 2, nocoverage: 489);
+        CheckReportMutants(report, total: 660, ignored: 117, survived: 5, killed: 11, timeout: 2, nocoverage: 491);
         CheckReportTestCounts(report, total: 21);
     }
 
@@ -121,7 +121,8 @@ public class ValidateStrykerResults
 
         var report = await strykerRunOutput.DeserializeJsonReportAsync();
 
-        CheckReportMutants(report, total: 660, ignored: 269, survived: 1, killed: 1, timeout: 0, nocoverage: 351);
+        CheckReportMutants(report, total: 667, ignored: 272, survived: 3, killed: 4, timeout: 2, nocoverage: 350, runtimeError: 2);
+        CheckReportTestCounts(report, total: 4);
     }
 
     [Fact]
@@ -140,7 +141,8 @@ public class ValidateStrykerResults
 
         var report = await strykerRunOutput.DeserializeJsonReportAsync();
 
-        CheckReportMutants(report, total: 660, ignored: 269, survived: 1, killed: 1, timeout: 0, nocoverage: 351);
+        CheckReportMutants(report, total: 660, ignored: 271, survived: 1, killed: 1, timeout: 0, nocoverage: 353);
+        CheckReportTestCounts(report, total: 2);
     }
 
     [Fact]
@@ -159,7 +161,8 @@ public class ValidateStrykerResults
 
         var report = await strykerRunOutput.DeserializeJsonReportAsync();
 
-        CheckReportMutants(report, total: 660, ignored: 269, survived: 1, killed: 1, timeout: 0, nocoverage: 351);
+        CheckReportMutants(report, total: 660, ignored: 271, survived: 1, killed: 1, timeout: 0, nocoverage: 353);
+        CheckReportTestCounts(report, total: 2);
     }
 
     [Fact]
@@ -178,7 +181,8 @@ public class ValidateStrykerResults
 
         var report = await strykerRunOutput.DeserializeJsonReportAsync();
 
-        CheckReportMutants(report, total: 660, ignored: 269, survived: 1, killed: 1, timeout: 0, nocoverage: 351);
+        CheckReportMutants(report, total: 660, ignored: 271, survived: 1, killed: 1, timeout: 0, nocoverage: 353);
+        CheckReportTestCounts(report, total: 2);
     }
 
     [Fact]
@@ -197,8 +201,12 @@ public class ValidateStrykerResults
 
         var report = await strykerRunOutput.DeserializeJsonReportAsync();
 
-        CheckReportMutants(report, total: 670, ignored: 272, survived: 1, killed: 1, timeout: 0, nocoverage: 358);
-        CheckReportTestCounts(report, total: 0); // MTP doesn't report tests yet
+        // Coverage is the union over all four test projects, so the Timeout.cs mutants covered only
+        // by the MSTest project count as covered (1 survived + 2 timeout), like in the MSTestMTP run.
+        // Before coverage files were split per test host, the final flush overwrote the shared
+        // file, usually losing exactly those three mutants to NoCoverage.
+        CheckReportMutants(report, total: 670, ignored: 274, survived: 2, killed: 1, timeout: 2, nocoverage: 357);
+        CheckReportTestCounts(report, total: 10);
     }
 
     [Fact]
@@ -237,7 +245,7 @@ public class ValidateStrykerResults
 
         var report = await strykerRunOutput.DeserializeJsonReportAsync();
 
-        CheckReportMutants(report, total: 660, ignored: 269, survived: 4, killed: 9, timeout: 2, nocoverage: 338);
+        CheckReportMutants(report, total: 660, ignored: 271, survived: 4, killed: 9, timeout: 2, nocoverage: 340);
         CheckReportTestCounts(report, total: 23);
     }
 
@@ -285,7 +293,7 @@ public class ValidateStrykerResults
         }
     }
 
-    private void CheckReportMutants(IJsonReport report, int total, int ignored, int survived, int killed, int timeout, int nocoverage)
+    private void CheckReportMutants(IJsonReport report, int total, int ignored, int survived, int killed, int timeout, int nocoverage, int runtimeError = 0)
     {
         var actualTotal = report.Files.Select(f => f.Value.Mutants.Count()).Sum();
         var actualIgnored = report.Files.Select(f => f.Value.Mutants.Count(m => m.Status == MutantStatus.Ignored.ToString())).Sum();
@@ -293,6 +301,7 @@ public class ValidateStrykerResults
         var actualKilled = report.Files.Select(f => f.Value.Mutants.Count(m => m.Status == MutantStatus.Killed.ToString())).Sum();
         var actualTimeout = report.Files.Select(f => f.Value.Mutants.Count(m => m.Status == MutantStatus.Timeout.ToString())).Sum();
         var actualNoCoverage = report.Files.Select(f => f.Value.Mutants.Count(m => m.Status == MutantStatus.NoCoverage.ToString())).Sum();
+        var actualRuntimeError = report.Files.Select(f => f.Value.Mutants.Count(m => m.Status == MutantStatus.RuntimeError.ToString())).Sum();
 
         report.Files.ShouldSatisfyAllConditions(
             () => actualTotal.ShouldBe(total),
@@ -300,7 +309,8 @@ public class ValidateStrykerResults
             () => actualSurvived.ShouldBe(survived),
             () => actualKilled.ShouldBe(killed),
             () => actualTimeout.ShouldBe(timeout),
-            () => actualNoCoverage.ShouldBe(nocoverage)
+            () => actualNoCoverage.ShouldBe(nocoverage),
+            () => actualRuntimeError.ShouldBe(runtimeError)
         );
 
         CheckMutationKindsValidity(report);

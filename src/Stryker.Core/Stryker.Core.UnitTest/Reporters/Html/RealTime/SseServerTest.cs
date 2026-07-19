@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using LaunchDarkly.EventSource;
@@ -32,6 +35,8 @@ public class SseServerTest : TestBase
         }
     }
 
+    // Callers wait up to 2000ms: establishing the loopback SSE connection is genuinely slower than
+    // 500ms on the slower hosted CI agents (notably macOS), where 500ms caused intermittent failures.
     private bool WaitForConnection(int timeout)
     {
         var watch = new Stopwatch();
@@ -79,7 +84,7 @@ public class SseServerTest : TestBase
         };
 
         Task.Run(() => sseClient.StartAsync());
-        WaitForConnection(500).ShouldBeTrue();
+        WaitForConnection(2000).ShouldBeTrue();
 
         _sut.SendEvent(new SseEvent<string> { Event = SseEventType.Finished, Data = "" });
         eventReceived.WaitOne();
@@ -108,7 +113,7 @@ public class SseServerTest : TestBase
         };
 
         Task.Run(() => sseClient.StartAsync());
-        WaitForConnection(500).ShouldBeTrue();
+        WaitForConnection(2000).ShouldBeTrue();
 
         _sut.SendEvent(new SseEvent<object>
         {
@@ -131,7 +136,7 @@ public class SseServerTest : TestBase
         var sseClient = new EventSource(new Uri($"http://localhost:{_sut.Port}/"));
         
         Task.Run(() => sseClient.StartAsync());
-        WaitForConnection(500).ShouldBeTrue();
+        WaitForConnection(2000).ShouldBeTrue();
         Task.Run( ()=> {sseClient.Close(); sseClient.Dispose();}).Wait();
 
         _sut.SendEvent(new SseEvent<object>
@@ -153,12 +158,146 @@ public class SseServerTest : TestBase
     public void ShouldIndicateWhenAtLeastOneClientIsConnected()
     {
         _sut.OpenSseEndpoint();
-        var sseClient = new EventSource(new Uri($"http://localhost:{_sut.Port}/"));
+        using var sseClient = new EventSource(new Uri($"http://localhost:{_sut.Port}/"));
 
         Task.Run(() => sseClient.StartAsync());
-        WaitForConnection(500).ShouldBeTrue();
+        WaitForConnection(2000).ShouldBeTrue();
 
         _sut.HasConnectedClients.ShouldBeTrue();
         _sut.CloseSseEndpoint();
+        _sut.HasConnectedClients.ShouldBeFalse();
+        _sut.CloseSseEndpoint();
+    }
+
+    [TestMethod]
+    public void ShouldCloseEndpointFromClientConnectedHandler()
+    {
+        _sut.ClientConnected += (_, _) => _sut.CloseSseEndpoint();
+        _sut.OpenSseEndpoint();
+        using var sseClient = new EventSource(new Uri($"http://localhost:{_sut.Port}/"));
+
+        Task.Run(() => sseClient.StartAsync());
+
+        WaitForConnection(500).ShouldBeTrue();
+        SpinWait.SpinUntil(() => !_sut.HasConnectedClients, 500).ShouldBeTrue();
+    }
+
+    [TestMethod]
+    public void ShouldContinueDisposingWritersAfterAnIoFailure()
+    {
+        _sut.OpenSseEndpoint();
+        var failingWriter = new StreamWriter(new FailingWriteStream());
+        failingWriter.Write("buffered");
+        var trackingStream = new TrackingStream();
+        var trackingWriter = new StreamWriter(trackingStream);
+        var writersField = typeof(SseServer).GetField("_writers", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(SseServer).FullName, "_writers");
+        var writers = (List<StreamWriter>)(writersField.GetValue(_sut)
+            ?? throw new InvalidOperationException("The writer collection was null."));
+        writers.Add(failingWriter);
+        writers.Add(trackingWriter);
+
+        Should.NotThrow(_sut.CloseSseEndpoint);
+
+        _sut.ConnectedClients.ShouldBe(0);
+        trackingStream.IsDisposed.ShouldBeTrue();
+    }
+
+    [TestMethod]
+    public void ShouldWaitForConcurrentDisposalToComplete()
+    {
+        ThreadPool.SetMinThreads(3,1);
+
+        _sut.OpenSseEndpoint();
+        var blockingStream = new BlockingDisposeStream();
+        var writersField = typeof(SseServer).GetField("_writers", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(SseServer).FullName, "_writers");
+        var writers = (List<StreamWriter>)(writersField.GetValue(_sut)
+            ?? throw new InvalidOperationException("The writer collection was null."));
+        writers.Add(new StreamWriter(blockingStream));
+
+        var firstClose = Task.Run(_sut.CloseSseEndpoint);
+        blockingStream.DisposeStarted.Wait(2000).ShouldBeTrue();
+        try
+        {
+            var secondStarted = new ManualResetEventSlim();
+            var secondClose = Task.Run(() =>
+            {
+                secondStarted.Set();
+                _sut.CloseSseEndpoint();
+            });
+            secondStarted.Wait(10000).ShouldBeTrue();
+
+            secondClose.Wait(10000).ShouldBeFalse();
+            blockingStream.AllowDispose.Set();
+            Task.WaitAll(firstClose, secondClose);
+        }
+        finally
+        {
+            blockingStream.AllowDispose.Set();
+        }
+
+        blockingStream.IsDisposed.ShouldBeTrue();
+    }
+
+    [TestMethod]
+    public void ShouldCloseWhileClientConnectedHandlerIsBlocked()
+    {
+        using var handlerEntered = new ManualResetEventSlim();
+        using var releaseHandler = new ManualResetEventSlim();
+        _sut.ClientConnected += (_, _) =>
+        {
+            handlerEntered.Set();
+            releaseHandler.Wait();
+        };
+        _sut.OpenSseEndpoint();
+        using var sseClient = new EventSource(new Uri($"http://localhost:{_sut.Port}/"));
+        Task.Run(() => sseClient.StartAsync());
+        handlerEntered.Wait(2000).ShouldBeTrue();
+
+        var close = Task.Run(_sut.CloseSseEndpoint);
+        try
+        {
+            close.Wait(2000).ShouldBeTrue();
+        }
+        finally
+        {
+            releaseHandler.Set();
+        }
+    }
+
+    private sealed class FailingWriteStream : MemoryStream
+    {
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new IOException("The client disconnected.");
+
+        public override void Write(ReadOnlySpan<byte> buffer) =>
+            throw new IOException("The client disconnected.");
+    }
+
+    private sealed class TrackingStream : MemoryStream
+    {
+        public bool IsDisposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = disposing;
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class BlockingDisposeStream : MemoryStream
+    {
+        public ManualResetEventSlim DisposeStarted { get; } = new();
+        public ManualResetEventSlim AllowDispose { get; } = new();
+        public bool IsDisposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            DisposeStarted.Set();
+            AllowDispose.Wait();
+            IsDisposed = disposing;
+            base.Dispose(disposing);
+        }
     }
 }
