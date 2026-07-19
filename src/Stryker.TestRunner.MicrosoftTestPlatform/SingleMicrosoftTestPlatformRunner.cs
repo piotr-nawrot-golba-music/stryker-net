@@ -36,6 +36,9 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
     // depends on server stop order and process shutdown timing. Giving every assembly's host its
     // own file and unioning them at read time makes coverage independent of both.
     private readonly ConcurrentDictionary<string, string> _coverageFilePaths = new();
+    // Assemblies whose live test host has flushed coverage at least once: proves the
+    // MutantControl poll thread is alive, so later waits can afford a longer deadline.
+    private readonly ConcurrentDictionary<string, bool> _assemblyFlushedOnce = new();
     private readonly IStrykerOptions? _options;
 
     private readonly Dictionary<string, AssemblyTestServer> _assemblyServers = new();
@@ -293,6 +296,157 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         }
     }
 
+    /// <summary>
+    /// Runs a single test and captures its coverage without restarting the test host.
+    /// After the test finishes, a token is written to the assembly's signal file; the injected
+    /// MutantControl's poll thread flushes the accumulated coverage to the assembly's coverage
+    /// file tagged with that token ("token|covered;static|end") and resets it, so the next test
+    /// starts from a clean slate. This trades the ~100-500 ms process restart of
+    /// <see cref="RunSingleTestForCoverageAsync"/> for a ~20 ms file round-trip, at the cost
+    /// of shared process state between tests (hence Normal, not Exact, confidence upstream).
+    /// </summary>
+    internal virtual async Task<ICoverageRunResult> RunSingleTestForCoverageInProcessAsync(
+        string assembly, TestNode test, string testId, CoverageConfidence confidence)
+    {
+        try
+        {
+            var server = await GetOrCreateServerAsync(assembly).ConfigureAwait(false);
+            await server.RunTestsAsync(new[] { test }).ConfigureAwait(false);
+
+            var token = Guid.NewGuid().ToString("N");
+            WriteSignalToken(assembly, token);
+
+            // A host that has never flushed may simply not be polling: MutantControl only starts
+            // its poll thread when instrumented code runs, so a test touching no mutated code in
+            // a cold host would otherwise stall for the full timeout. Use a short deadline until
+            // the first flush proves the poll thread is alive.
+            var timeout = _assemblyFlushedOnce.ContainsKey(assembly)
+                ? TimeSpan.FromSeconds(10)
+                : TimeSpan.FromSeconds(3);
+
+            var (coveredMutants, staticMutants, flushed) =
+                await WaitForTokenedCoverageAsync(assembly, token, timeout).ConfigureAwait(false);
+
+            if (!flushed)
+            {
+                _logger.LogWarning(
+                    "{RunnerId}: Test host did not flush coverage for test {TestId} in time. Marking as Dubious.",
+                    RunnerId, testId);
+
+                // Clear the signal so a late flush of this token cannot fire during the next
+                // test and reset coverage mid-run
+                DeleteFileSafely(GetSignalFilePath(assembly));
+
+                return CoverageRunResult.Create(
+                    testId,
+                    CoverageConfidence.Dubious,
+                    Array.Empty<int>(),
+                    Array.Empty<int>(),
+                    Array.Empty<int>());
+            }
+
+            _assemblyFlushedOnce.TryAdd(assembly, true);
+
+            _logger.LogDebug(
+                "{RunnerId}: Test {TestId} covers {CoveredCount} mutants ({StaticCount} static)",
+                RunnerId, testId, coveredMutants.Count, staticMutants.Count);
+
+            return CoverageRunResult.Create(
+                testId,
+                confidence,
+                coveredMutants,
+                staticMutants,
+                Array.Empty<int>());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{RunnerId}: Failed to capture in-process coverage for test {TestId}", RunnerId, testId);
+            return CoverageRunResult.Create(
+                testId,
+                CoverageConfidence.Dubious,
+                Array.Empty<int>(),
+                Array.Empty<int>(),
+                Array.Empty<int>());
+        }
+    }
+
+    /// <summary>
+    /// Writes the flush token to the assembly's signal file. Retried a few times because on
+    /// Windows the host's poll thread briefly holds the file open with FileShare.Read every
+    /// 15 ms, which denies a concurrent write with a sharing violation.
+    /// </summary>
+    private void WriteSignalToken(string assembly, string token)
+    {
+        var signalFilePath = GetSignalFilePath(assembly);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.WriteAllText(signalFilePath, token);
+                return;
+            }
+            catch (IOException) when (attempt < 5)
+            {
+                Thread.Sleep(10);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Polls the assembly's coverage file until it contains a flush for the given token
+    /// ("token|covered;static|end") or the timeout elapses. A stale file from a previous
+    /// flush carries a different token and is ignored, so no delete-before-read is needed.
+    /// </summary>
+    internal async Task<(IReadOnlyList<int> CoveredMutants, IReadOnlyList<int> StaticMutants, bool Flushed)>
+        WaitForTokenedCoverageAsync(string assembly, string token, TimeSpan? timeout = null)
+    {
+        var coverageFilePath = GetCoverageFilePath(assembly);
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        var prefix = token + "|";
+
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                if (File.Exists(coverageFilePath))
+                {
+                    var content = File.ReadAllText(coverageFilePath);
+                    // The "|end" suffix guards against reading a partially written file
+                    if (content.StartsWith(prefix, StringComparison.Ordinal)
+                        && content.TrimEnd().EndsWith("|end", StringComparison.Ordinal))
+                    {
+                        var payload = content.TrimEnd();
+                        payload = payload.Substring(prefix.Length, payload.Length - prefix.Length - "|end".Length);
+                        var parts = payload.Split(';');
+                        var coveredMutants = ParseMutantIds(parts.Length > 0 ? parts[0] : string.Empty);
+                        var staticMutants = ParseMutantIds(parts.Length > 1 ? parts[1] : string.Empty);
+                        return (coveredMutants, staticMutants, true);
+                    }
+                }
+            }
+            catch (IOException)
+            {
+                // The test host may be writing the file right now; retry on the next tick
+            }
+
+            await Task.Delay(10).ConfigureAwait(false);
+        }
+
+        return (Array.Empty<int>(), Array.Empty<int>(), false);
+    }
+
+    /// <summary>
+    /// The flush-signal file is scoped per (runner, assembly), like the coverage file: each
+    /// live test host polls only its own signal file and flushes only its own coverage file,
+    /// so a token written for one assembly's test can never make another assembly's host
+    /// flush, and no two hosts ever write the same file.
+    /// </summary>
+    internal string GetSignalFilePath(string assembly)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(assembly)))[..8];
+        return $"{_coverageFilePathBase}-signal-{hash}.txt";
+    }
+
     private void WriteMutantIdToFile(int mutantId)
     {
         try
@@ -321,7 +475,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
         }
     }
 
-    private Dictionary<string, string?> BuildEnvironmentVariables(string assembly)
+    internal Dictionary<string, string?> BuildEnvironmentVariables(string assembly)
     {
         var envVars = new Dictionary<string, string?>
         {
@@ -330,10 +484,13 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
 
         ExternalEnvironmentVariables.Add(envVars);
 
-        // Add coverage filename when in coverage mode (MutantControl will combine with temp path)
+        // Add coverage filenames when in coverage mode (MutantControl will combine with temp path).
+        // The signal file lets the runner request an on-demand coverage flush (live per-test
+        // capture); MutantControl only starts its poll thread when the variable is present.
         if (_coverageMode)
         {
             envVars["STRYKER_COVERAGE_FILE"] = Path.GetFileName(GetCoverageFilePath(assembly));
+            envVars["STRYKER_COVERAGE_SIGNAL_FILE"] = Path.GetFileName(GetSignalFilePath(assembly));
         }
 
         return envVars;
@@ -382,8 +539,21 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
             _assemblyServers.Clear();
         }
 
-        // Clean up any existing coverage files, even when enabling, to ensure we start fresh
+        // Clean up any existing coverage and signal files, even when enabling, to start fresh
         DeleteCoverageFiles();
+        DeleteSignalFiles();
+    }
+
+    /// <summary>
+    /// Deletes the signal files of every assembly that got a coverage file assigned; the
+    /// signal path is derived from the same per-assembly registry.
+    /// </summary>
+    private void DeleteSignalFiles()
+    {
+        foreach (var assembly in _coverageFilePaths.Keys)
+        {
+            DeleteFileSafely(GetSignalFilePath(assembly));
+        }
     }
 
     /// <summary>
@@ -448,17 +618,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
     {
         foreach (var coverageFilePath in _coverageFilePaths.Values)
         {
-            try
-            {
-                if (File.Exists(coverageFilePath))
-                {
-                    File.Delete(coverageFilePath);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "{RunnerId}: Failed to delete coverage file at {Path}", RunnerId, coverageFilePath);
-            }
+            DeleteFileSafely(coverageFilePath);
         }
     }
 
@@ -1002,6 +1162,7 @@ public class SingleMicrosoftTestPlatformRunner : IDisposable
                 _logger.LogWarning(ex, "{RunnerId}: Failed to clean up temp files", RunnerId);
             }
             DeleteCoverageFiles();
+            DeleteSignalFiles();
         }
         _disposed = true;
     }

@@ -4,7 +4,6 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Stryker.Abstractions.Exceptions;
 using Stryker.Abstractions.Options;
-using Stryker.Utilities.Logging;
 
 namespace Stryker.Configuration.Options.Inputs;
 
@@ -47,29 +46,8 @@ public class CoverageAnalysisInput : Input<string>
                 $"Incorrect coverageAnalysis option ({SuppliedInput}). The options are [{string.Join(", ", _possibleValues.Keys)}].");
         }
 
-        var mode = entry.mode;
-
-        // MTP captures per-test coverage by restarting the test host between tests (the host's
-        // ProcessExit flushes the covered set), so coverage is always captured in isolation.
-        // 'perTest' (process reuse) is not yet available for MTP, so promote it to
-        // 'perTestInIsolation'. Reuse is tracked as a follow-up (see PR #3516).
-        if (testRunner == TestRunner.MicrosoftTestPlatform
-            && mode.HasFlag(OptimizationModes.CoverageBasedTest)
-            && !mode.HasFlag(OptimizationModes.CaptureCoveragePerTest))
-        {
-            // Warn only when the user explicitly asked for 'perTest'; stay silent on the default.
-            if (SuppliedInput != null)
-            {
-                logger ??= ApplicationLogging.LoggerFactory.CreateLogger<CoverageAnalysisInput>();
-                logger.LogWarning(
-                    "The Microsoft Test Platform runner captures per-test coverage in isolation; 'perTest' "
-                    + "(process reuse) is not yet available and has been upgraded to 'perTestInIsolation'. "
-                    + "Process reuse for MTP is planned as a follow-up.");
-            }
-
-            mode |= OptimizationModes.CaptureCoveragePerTest;
-        }
-
-        return mode;
+        // 'perTest' is supported on MTP through an on-demand coverage flush in the live test
+        // host (no restart), so no promotion to 'perTestInIsolation' is needed anymore.
+        return entry.mode;
     }
 }
